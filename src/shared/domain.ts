@@ -9,10 +9,451 @@
  */
 
 export const APP_NAME = "Agency Studio";
-export const APP_VERSION = "0.1.0";
+export const APP_VERSION = "0.2.0";
 export const WORKSPACE_NAME = "Agency Studio";
+export const PHASE_LABEL = "Phase 02 · Command Center";
 
-/* ---------------------------------- Leads ---------------------------------- */
+/* -------------------------------- Pipeline -------------------------------- */
+
+/**
+ * Business pipeline stages, in operational order. WON and LOST are terminal.
+ *
+ * Phase 2 records every stage through `setStage` (which enforces the
+ * transitions in `src/shared/pipeline.ts`) and writes a real activity row.
+ * Nothing ever advances a record automatically.
+ */
+export const PIPELINE_STAGES = [
+  "DISCOVERED",
+  "QUALIFIED",
+  "DEMO_READY",
+  "OUTREACH_READY",
+  "CONTACTED",
+  "REPLIED",
+  "INTERESTED",
+  "PROPOSAL",
+  "WON",
+  "LOST",
+] as const;
+export type PipelineStage = (typeof PIPELINE_STAGES)[number];
+
+export const PIPELINE_STAGE_LABELS: Record<PipelineStage, string> = {
+  DISCOVERED: "Discovered",
+  QUALIFIED: "Qualified",
+  DEMO_READY: "Demo ready",
+  OUTREACH_READY: "Outreach ready",
+  CONTACTED: "Contacted",
+  REPLIED: "Replied",
+  INTERESTED: "Interested",
+  PROPOSAL: "Proposal",
+  WON: "Won",
+  LOST: "Lost",
+};
+
+export const PIPELINE_STAGE_TONES: Record<PipelineStage, StatusTone> = {
+  DISCOVERED: "neutral",
+  QUALIFIED: "info",
+  DEMO_READY: "info",
+  OUTREACH_READY: "warning",
+  CONTACTED: "info",
+  REPLIED: "info",
+  INTERESTED: "warning",
+  PROPOSAL: "info",
+  WON: "success",
+  LOST: "error",
+};
+
+/** Stages that represent an engaged, qualified opportunity (not yet won/lost). */
+export const ENGAGED_STAGES: readonly PipelineStage[] = [
+  "QUALIFIED",
+  "DEMO_READY",
+  "OUTREACH_READY",
+  "CONTACTED",
+  "REPLIED",
+  "INTERESTED",
+  "PROPOSAL",
+];
+
+/** Stages representing an active conversation/opportunity in play. */
+export const ACTIVE_OPPORTUNITY_STAGES: readonly PipelineStage[] = [
+  "CONTACTED",
+  "REPLIED",
+  "INTERESTED",
+  "PROPOSAL",
+];
+
+/* -------------------------------- Campaigns ------------------------------- */
+
+export const CAMPAIGN_STATUSES = [
+  "DRAFT",
+  "READY",
+  "RUNNING",
+  "PAUSED",
+  "COMPLETED",
+  "CANCELLED",
+] as const;
+export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
+
+export const CAMPAIGN_STATUS_LABELS: Record<CampaignStatus, string> = {
+  DRAFT: "Draft",
+  READY: "Ready",
+  RUNNING: "Running",
+  PAUSED: "Paused",
+  COMPLETED: "Completed",
+  CANCELLED: "Cancelled",
+};
+
+export const CAMPAIGN_STATUS_TONES: Record<CampaignStatus, StatusTone> = {
+  DRAFT: "neutral",
+  READY: "info",
+  RUNNING: "success",
+  PAUSED: "warning",
+  COMPLETED: "success",
+  CANCELLED: "error",
+};
+
+/* --------------------------------- Markets --------------------------------- */
+
+export interface MarketRegion {
+  name: string;
+}
+
+export interface KnownMarket {
+  code: string; // ISO-ish short code: US, CA, GB, NP
+  name: string;
+  flag: string;
+  country: string;
+  regions: string[];
+}
+
+/**
+ * The initial market catalog. Configuration data (not fabricated business
+ * data): it seeds the `markets` table so campaigns can select markets and
+ * regions. Future phases may extend the catalog without schema changes.
+ */
+export const KNOWN_MARKETS: readonly KnownMarket[] = [
+  {
+    code: "US",
+    name: "United States",
+    flag: "🇺🇸",
+    country: "United States",
+    regions: [
+      "Alabama",
+      "Alaska",
+      "Arizona",
+      "Arkansas",
+      "California",
+      "Colorado",
+      "Connecticut",
+      "Delaware",
+      "Florida",
+      "Georgia",
+      "Hawaii",
+      "Idaho",
+      "Illinois",
+      "Indiana",
+      "Iowa",
+      "Kansas",
+      "Kentucky",
+      "Louisiana",
+      "Maine",
+      "Maryland",
+      "Massachusetts",
+      "Michigan",
+      "Minnesota",
+      "Mississippi",
+      "Missouri",
+      "Montana",
+      "Nebraska",
+      "Nevada",
+      "New Hampshire",
+      "New Jersey",
+      "New Mexico",
+      "New York",
+      "North Carolina",
+      "North Dakota",
+      "Ohio",
+      "Oklahoma",
+      "Oregon",
+      "Pennsylvania",
+      "Rhode Island",
+      "South Carolina",
+      "South Dakota",
+      "Tennessee",
+      "Texas",
+      "Utah",
+      "Vermont",
+      "Virginia",
+      "Washington",
+      "West Virginia",
+      "Wisconsin",
+      "Wyoming",
+    ],
+  },
+  {
+    code: "CA",
+    name: "Canada",
+    flag: "🇨🇦",
+    country: "Canada",
+    regions: [
+      "Alberta",
+      "British Columbia",
+      "Manitoba",
+      "New Brunswick",
+      "Newfoundland and Labrador",
+      "Northwest Territories",
+      "Nova Scotia",
+      "Nunavut",
+      "Ontario",
+      "Prince Edward Island",
+      "Quebec",
+      "Saskatchewan",
+      "Yukon",
+    ],
+  },
+  {
+    code: "GB",
+    name: "United Kingdom",
+    flag: "🇬🇧",
+    country: "United Kingdom",
+    regions: [
+      "Scotland",
+      "Wales",
+      "Northern Ireland",
+      "North East England",
+      "North West England",
+      "Yorkshire and the Humber",
+      "East Midlands",
+      "West Midlands",
+      "East of England",
+      "London",
+      "South East England",
+      "South West England",
+    ],
+  },
+  {
+    code: "NP",
+    name: "Nepal",
+    flag: "🇳🇵",
+    country: "Nepal",
+    regions: [
+      "Koshi",
+      "Madhesh",
+      "Bagmati",
+      "Gandaki",
+      "Lumbini",
+      "Karnali",
+      "Sudurpashchim",
+    ],
+  },
+];
+
+export const MARKET_COUNTRIES: readonly string[] = KNOWN_MARKETS.map(
+  (market) => market.country,
+);
+
+/* ------------------------------ Website states ----------------------------- */
+
+/**
+ * Operator-assessed state of a business's current website. Phase 2 never
+ * claims automated analysis: the value is set by the operator (default
+ * UNKNOWN) or, later, by a real website-analysis system.
+ */
+export const WEBSITE_STATES = [
+  "UNKNOWN",
+  "NONE",
+  "BASIC",
+  "MODERN",
+  "EXCELLENT",
+] as const;
+export type WebsiteState = (typeof WEBSITE_STATES)[number];
+
+export const WEBSITE_STATE_LABELS: Record<WebsiteState, string> = {
+  UNKNOWN: "Unknown",
+  NONE: "No website",
+  BASIC: "Basic",
+  MODERN: "Modern",
+  EXCELLENT: "Excellent",
+};
+
+export const WEBSITE_STATE_TONES: Record<WebsiteState, StatusTone> = {
+  UNKNOWN: "neutral",
+  NONE: "disabled",
+  BASIC: "neutral",
+  MODERN: "info",
+  EXCELLENT: "success",
+};
+
+/* ---------------------------- Opportunity scoring --------------------------- */
+
+export type ScoreTier = "LOW" | "MEDIUM" | "HIGH";
+
+export const SCORE_TIER_LABELS: Record<ScoreTier, string> = {
+  LOW: "Low",
+  MEDIUM: "Medium",
+  HIGH: "High",
+};
+
+export const SCORE_TIER_TONES: Record<ScoreTier, StatusTone> = {
+  LOW: "neutral",
+  MEDIUM: "warning",
+  HIGH: "success",
+};
+
+/** Scores are 0-100. HIGH starts at 70 (used for the high-priority list). */
+export const HIGH_PRIORITY_SCORE = 70;
+export const MEDIUM_PRIORITY_SCORE = 40;
+
+export function scoreTier(score: number | null | undefined): ScoreTier | null {
+  if (score === null || score === undefined) return null;
+  if (score >= HIGH_PRIORITY_SCORE) return "HIGH";
+  if (score >= MEDIUM_PRIORITY_SCORE) return "MEDIUM";
+  return "LOW";
+}
+
+export function isHighPriority(score: number | null | undefined): boolean {
+  return scoreTier(score) === "HIGH";
+}
+
+/* -------------------------------- Businesses ------------------------------- */
+
+export const BUSINESS_SOURCES = [
+  "MANUAL",
+  "REFERRAL",
+  "DIRECTORY",
+  "WEBSITE_RESEARCH",
+  "SOCIAL",
+  "PHASE1_MIGRATION",
+  "OTHER",
+] as const;
+export type BusinessSource = (typeof BUSINESS_SOURCES)[number];
+
+export const BUSINESS_SOURCE_LABELS: Record<BusinessSource, string> = {
+  MANUAL: "Manual entry",
+  REFERRAL: "Referral",
+  DIRECTORY: "Directory",
+  WEBSITE_RESEARCH: "Website research",
+  SOCIAL: "Social profile",
+  PHASE1_MIGRATION: "Phase 1 migration",
+  OTHER: "Other",
+};
+
+/* --------------------------------- Clients --------------------------------- */
+
+export const CLIENT_STATUSES = [
+  "PROSPECT",
+  "ACTIVE",
+  "PAUSED",
+  "COMPLETED",
+  "ARCHIVED",
+] as const;
+export type ClientStatus = (typeof CLIENT_STATUSES)[number];
+
+export const CLIENT_STATUS_LABELS: Record<ClientStatus, string> = {
+  PROSPECT: "Prospect",
+  ACTIVE: "Active",
+  PAUSED: "Paused",
+  COMPLETED: "Completed",
+  ARCHIVED: "Archived",
+};
+
+export const CLIENT_STATUS_TONES: Record<ClientStatus, StatusTone> = {
+  PROSPECT: "info",
+  ACTIVE: "success",
+  PAUSED: "warning",
+  COMPLETED: "success",
+  ARCHIVED: "disabled",
+};
+
+/* --------------------------------- Projects -------------------------------- */
+
+export const PROJECT_STATUSES = [
+  "PLANNING",
+  "IN_PROGRESS",
+  "REVIEW",
+  "APPROVED",
+  "DELIVERED",
+  "MAINTENANCE",
+  "COMPLETED",
+] as const;
+export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
+
+export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
+  PLANNING: "Planning",
+  IN_PROGRESS: "In progress",
+  REVIEW: "In review",
+  APPROVED: "Approved",
+  DELIVERED: "Delivered",
+  MAINTENANCE: "Maintenance",
+  COMPLETED: "Completed",
+};
+
+export const PROJECT_STATUS_TONES: Record<ProjectStatus, StatusTone> = {
+  PLANNING: "neutral",
+  IN_PROGRESS: "info",
+  REVIEW: "warning",
+  APPROVED: "info",
+  DELIVERED: "success",
+  MAINTENANCE: "neutral",
+  COMPLETED: "success",
+};
+
+/* -------------------------------- Activity --------------------------------- */
+
+export const ACTIVITY_TYPES = [
+  // Campaigns
+  "CAMPAIGN_CREATED",
+  "CAMPAIGN_UPDATED",
+  "CAMPAIGN_STATUS_CHANGED",
+  "CAMPAIGN_DELETED",
+  // Businesses
+  "BUSINESS_CREATED",
+  "BUSINESS_UPDATED",
+  "BUSINESS_DELETED",
+  "BUSINESS_STAGE_CHANGED",
+  "BUSINESS_CONVERTED_TO_CLIENT",
+  // Clients
+  "CLIENT_CREATED",
+  "CLIENT_UPDATED",
+  "CLIENT_DELETED",
+  // Projects
+  "PROJECT_CREATED",
+  "PROJECT_UPDATED",
+  "PROJECT_DELETED",
+  // Legacy Phase 1 lead rows (kept so old activity renders; no new writes)
+  "LEAD_CREATED",
+  "LEAD_UPDATED",
+  "LEAD_DELETED",
+  // System
+  "SYSTEM_EVENT",
+] as const;
+export type ActivityType = (typeof ACTIVITY_TYPES)[number];
+
+export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
+  CAMPAIGN_CREATED: "Campaign created",
+  CAMPAIGN_UPDATED: "Campaign updated",
+  CAMPAIGN_STATUS_CHANGED: "Campaign status changed",
+  CAMPAIGN_DELETED: "Campaign deleted",
+  BUSINESS_CREATED: "Business created",
+  BUSINESS_UPDATED: "Business updated",
+  BUSINESS_DELETED: "Business deleted",
+  BUSINESS_STAGE_CHANGED: "Stage changed",
+  BUSINESS_CONVERTED_TO_CLIENT: "Converted to client",
+  CLIENT_CREATED: "Client created",
+  CLIENT_UPDATED: "Client updated",
+  CLIENT_DELETED: "Client deleted",
+  PROJECT_CREATED: "Project created",
+  PROJECT_UPDATED: "Project updated",
+  PROJECT_DELETED: "Project deleted",
+  LEAD_CREATED: "Lead created",
+  LEAD_UPDATED: "Lead updated",
+  LEAD_DELETED: "Lead deleted",
+  SYSTEM_EVENT: "System event",
+};
+
+/* ------------------------------ Legacy Phase 1 ------------------------------
+ * The `leads` table is retained in the schema only as the typed source for
+ * the Phase 2 migration (`src/convex/migrate.ts`). After migration it is
+ * empty and unused. New records use `businesses`. */
 
 export const LEAD_STATUSES = [
   "NEW",
@@ -33,89 +474,14 @@ export const LEAD_STATUS_LABELS: Record<LeadStatus, string> = {
   LOST: "Lost",
 };
 
-export const LEAD_STATUS_TONES: Record<LeadStatus, StatusTone> = {
-  NEW: "neutral",
-  CONTACTED: "info",
-  QUALIFIED: "warning",
-  PROPOSAL: "info",
-  WON: "success",
-  LOST: "error",
-};
-
-/* -------------------------------- Projects -------------------------------- */
-
-export const PROJECT_STATUSES = [
-  "DRAFT",
-  "IN_PROGRESS",
-  "REVIEW",
-  "LIVE",
-  "PAUSED",
-  "ARCHIVED",
-] as const;
-export type ProjectStatus = (typeof PROJECT_STATUSES)[number];
-
-export const PROJECT_STATUS_LABELS: Record<ProjectStatus, string> = {
-  DRAFT: "Draft",
-  IN_PROGRESS: "In progress",
-  REVIEW: "In review",
-  LIVE: "Live",
-  PAUSED: "Paused",
-  ARCHIVED: "Archived",
-};
-
-export const PROJECT_STATUS_TONES: Record<ProjectStatus, StatusTone> = {
-  DRAFT: "neutral",
-  IN_PROGRESS: "info",
-  REVIEW: "warning",
-  LIVE: "success",
-  PAUSED: "neutral",
-  ARCHIVED: "disabled",
-};
-
-/* --------------------------------- Clients --------------------------------- */
-
-export const CLIENT_STATUSES = ["ACTIVE", "PAUSED", "ARCHIVED"] as const;
-export type ClientStatus = (typeof CLIENT_STATUSES)[number];
-
-export const CLIENT_STATUS_LABELS: Record<ClientStatus, string> = {
-  ACTIVE: "Active",
-  PAUSED: "Paused",
-  ARCHIVED: "Archived",
-};
-
-export const CLIENT_STATUS_TONES: Record<ClientStatus, StatusTone> = {
-  ACTIVE: "success",
-  PAUSED: "warning",
-  ARCHIVED: "disabled",
-};
-
-/* -------------------------------- Activity --------------------------------- */
-
-export const ACTIVITY_TYPES = [
-  "LEAD_CREATED",
-  "LEAD_UPDATED",
-  "LEAD_DELETED",
-  "CLIENT_CREATED",
-  "CLIENT_UPDATED",
-  "CLIENT_DELETED",
-  "PROJECT_CREATED",
-  "PROJECT_UPDATED",
-  "PROJECT_DELETED",
-  "SYSTEM_EVENT",
-] as const;
-export type ActivityType = (typeof ACTIVITY_TYPES)[number];
-
-export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
-  LEAD_CREATED: "Lead created",
-  LEAD_UPDATED: "Lead updated",
-  LEAD_DELETED: "Lead deleted",
-  CLIENT_CREATED: "Client created",
-  CLIENT_UPDATED: "Client updated",
-  CLIENT_DELETED: "Client deleted",
-  PROJECT_CREATED: "Project created",
-  PROJECT_UPDATED: "Project updated",
-  PROJECT_DELETED: "Project deleted",
-  SYSTEM_EVENT: "System event",
+/** Phase 1 lead status → Phase 2 pipeline stage (used by the migration). */
+export const LEAD_STATUS_TO_STAGE: Record<LeadStatus, PipelineStage> = {
+  NEW: "DISCOVERED",
+  CONTACTED: "CONTACTED",
+  QUALIFIED: "QUALIFIED",
+  PROPOSAL: "PROPOSAL",
+  WON: "WON",
+  LOST: "LOST",
 };
 
 /* -------------------------------- Providers -------------------------------- */
@@ -123,9 +489,9 @@ export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
 /**
  * Provider categories the architecture reserves for later phases.
  *
- * Phase 1 never connects to any of these — the `providers` table simply
- * records the slots, each reported honestly as NOT_CONFIGURED until a future
- * phase wires a real integration.
+ * Phase 2 still connects to none of them — the `providers` table simply
+ * records the slots, each reported honestly as NOT_CONFIGURED until a
+ * future phase wires a real integration.
  */
 export const PROVIDER_TYPES = [
   "AI",

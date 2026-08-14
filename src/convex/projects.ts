@@ -89,7 +89,7 @@ export const create = mutation({
       clientId: args.clientId,
       domain: normalizeText(args.domain),
       notes: normalizeText(args.notes),
-      status: "DRAFT",
+      status: "PLANNING",
       updatedAt: Date.now(),
     });
     await recordActivity(ctx, {

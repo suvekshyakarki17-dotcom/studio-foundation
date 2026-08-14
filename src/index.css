@@ -1,0 +1,180 @@
+@import url("https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..600;1,9..144,300..600&family=Inter:wght@400;450;500;600&display=swap");
+@import "tailwindcss";
+@import "tw-animate-css";
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-serif: "Fraunces", Georgia, "Times New Roman", serif;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* ============================================================
+   STUDIO THEME
+   Gallery-clean and refined: warm off-whites, thin framing,
+   muted neutrals, careful spacing, soft editorial presentation.
+   ============================================================ */
+
+:root {
+  /* Restrained radius — the studio look lives in spacing and hairline
+     borders, not rounded corners. */
+  --radius: 0.375rem;
+
+  /* Warm paper + ink */
+  --background: oklch(0.97 0.005 80);
+  --foreground: oklch(0.24 0.012 60);
+
+  --card: oklch(0.992 0.003 78);
+  --card-foreground: oklch(0.24 0.012 60);
+
+  --popover: oklch(0.992 0.003 78);
+  --popover-foreground: oklch(0.24 0.012 60);
+
+  --primary: oklch(0.24 0.012 60);
+  --primary-foreground: oklch(0.985 0.004 78);
+
+  --secondary: oklch(0.945 0.007 80);
+  --secondary-foreground: oklch(0.3 0.014 60);
+
+  --muted: oklch(0.95 0.007 80);
+  --muted-foreground: oklch(0.5 0.015 70);
+
+  --accent: oklch(0.925 0.018 70);
+  --accent-foreground: oklch(0.3 0.02 55);
+
+  --destructive: oklch(0.55 0.16 32);
+
+  /* Thin warm framing */
+  --border: oklch(0.885 0.01 78);
+  --input: oklch(0.885 0.01 78);
+
+  /* Muted clay focus ring */
+  --ring: oklch(0.55 0.09 50);
+
+  --chart-1: oklch(0.5 0.12 45);
+  --chart-2: oklch(0.55 0.05 200);
+  --chart-3: oklch(0.6 0.06 85);
+  --chart-4: oklch(0.5 0.1 280);
+  --chart-5: oklch(0.62 0.08 60);
+
+  --sidebar: oklch(0.985 0.004 78);
+  --sidebar-foreground: oklch(0.28 0.012 60);
+  --sidebar-primary: oklch(0.24 0.012 60);
+  --sidebar-primary-foreground: oklch(0.985 0.004 78);
+  --sidebar-accent: oklch(0.925 0.018 70);
+  --sidebar-accent-foreground: oklch(0.3 0.02 55);
+  --sidebar-border: oklch(0.885 0.01 78);
+  --sidebar-ring: oklch(0.55 0.09 50);
+}
+
+.dark {
+  --background: oklch(0.21 0.01 60);
+  --foreground: oklch(0.94 0.005 75);
+
+  --card: oklch(0.25 0.012 60);
+  --card-foreground: oklch(0.94 0.005 75);
+
+  --popover: oklch(0.25 0.012 60);
+  --popover-foreground: oklch(0.94 0.005 75);
+
+  --primary: oklch(0.93 0.008 75);
+  --primary-foreground: oklch(0.21 0.01 60);
+
+  --secondary: oklch(0.29 0.012 60);
+  --secondary-foreground: oklch(0.93 0.005 75);
+
+  --muted: oklch(0.29 0.012 60);
+  --muted-foreground: oklch(0.68 0.01 70);
+
+  --accent: oklch(0.3 0.02 55);
+  --accent-foreground: oklch(0.94 0.005 75);
+
+  --destructive: oklch(0.65 0.16 30);
+
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 15%);
+
+  --ring: oklch(0.6 0.09 50);
+
+  --chart-1: oklch(0.65 0.12 45);
+  --chart-2: oklch(0.65 0.05 200);
+  --chart-3: oklch(0.68 0.06 85);
+  --chart-4: oklch(0.62 0.1 280);
+  --chart-5: oklch(0.7 0.08 60);
+
+  --sidebar: oklch(0.24 0.01 60);
+  --sidebar-foreground: oklch(0.93 0.005 75);
+  --sidebar-primary: oklch(0.93 0.008 75);
+  --sidebar-primary-foreground: oklch(0.21 0.01 60);
+  --sidebar-accent: oklch(0.3 0.02 55);
+  --sidebar-accent-foreground: oklch(0.94 0.005 75);
+  --sidebar-border: oklch(1 0 0 / 12%);
+  --sidebar-ring: oklch(0.6 0.09 50);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-foreground);
+  }
+  button:not([disabled]),
+  [role="button"]:not([disabled]) {
+    cursor: pointer;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -1,5 +1,6 @@
 import { Link, NavLink } from "react-router";
 import { cn } from "@/lib/utils";
+import { PHASE_LABEL } from "@/shared/domain";
 import { FUTURE_ITEMS, NAV_SECTIONS } from "./nav";
 import { StudioMark } from "./studio-mark";
 
@@ -22,7 +23,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
               Agency Studio
             </span>
             <span className="block text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
-              Phase 01 · Foundation
+              {PHASE_LABEL}
             </span>
           </span>
         </Link>

@@ -7,7 +7,7 @@ import { clientEnv } from "@/lib/config";
 import { Loader2 } from "lucide-react";
 import React, { StrictMode, Suspense, lazy, useEffect } from "react";
 import { createRoot } from "react-dom/client";
-import { BrowserRouter, Route, Routes, useLocation } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router";
 import { VlyToolbar } from "../vly-toolbar-readonly.tsx";
 import "./index.css";
 
@@ -17,7 +17,8 @@ const AuthPage = lazy(() => import("./pages/Auth.tsx"));
 const NotFound = lazy(() => import("./pages/NotFound.tsx"));
 const AppShell = lazy(() => import("./components/studio/app-shell.tsx"));
 const OverviewPage = lazy(() => import("./pages/studio/overview.tsx"));
-const LeadsPage = lazy(() => import("./pages/studio/leads.tsx"));
+const PipelinePage = lazy(() => import("./pages/studio/pipeline.tsx"));
+const CampaignsPage = lazy(() => import("./pages/studio/campaigns.tsx"));
 const WebsitesPage = lazy(() => import("./pages/studio/websites.tsx"));
 const ClientsPage = lazy(() => import("./pages/studio/clients.tsx"));
 const ActivityPage = lazy(() => import("./pages/studio/activity.tsx"));
@@ -139,7 +140,12 @@ createRoot(document.getElementById("root")!).render(
                 }
               >
                 <Route index element={<OverviewPage />} />
-                <Route path="leads" element={<LeadsPage />} />
+                <Route path="pipeline" element={<PipelinePage />} />
+                <Route path="campaigns" element={<CampaignsPage />} />
+                <Route
+                  path="leads"
+                  element={<Navigate to="/dashboard/pipeline" replace />}
+                />
                 <Route path="websites" element={<WebsitesPage />} />
                 <Route path="clients" element={<ClientsPage />} />
                 <Route path="activity" element={<ActivityPage />} />

@@ -6,6 +6,7 @@ import {
   Globe,
   History,
   LayoutGrid,
+  Megaphone,
   PenTool,
   Send,
   Settings,
@@ -28,10 +29,11 @@ export interface NavSection {
 /** Routes that actually exist in the studio (see src/main.tsx). */
 export const NAV_SECTIONS: NavSection[] = [
   {
-    label: "Workspace",
+    label: "Operations",
     items: [
-      { to: "/dashboard", label: "Overview", icon: LayoutGrid, end: true },
-      { to: "/dashboard/leads", label: "Leads", icon: Contact },
+      { to: "/dashboard", label: "Command center", icon: LayoutGrid, end: true },
+      { to: "/dashboard/pipeline", label: "Pipeline", icon: Contact },
+      { to: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone },
       { to: "/dashboard/websites", label: "Websites", icon: Globe },
       { to: "/dashboard/clients", label: "Clients", icon: Building2 },
     ],
@@ -50,7 +52,7 @@ export const NAV_ITEMS: NavItem[] = NAV_SECTIONS.flatMap(
   (section) => section.items,
 );
 
-/** Planned modules — visible but explicitly unavailable in Phase 1. */
+/** Planned modules — visible but explicitly unavailable until later phases. */
 export const FUTURE_ITEMS: Array<{ label: string; icon: LucideIcon }> = [
   { label: "Intelligence", icon: Sparkles },
   { label: "Repository Lab", icon: FolderGit2 },
@@ -58,17 +60,21 @@ export const FUTURE_ITEMS: Array<{ label: string; icon: LucideIcon }> = [
   { label: "Outreach", icon: Send },
 ];
 
-export type CreateTarget = "lead" | "client" | "project";
+export type CreateTarget = "business" | "campaign" | "client" | "project";
 
 /** Page titles/descriptions for the topbar context line. */
 export const PAGE_META: Record<string, { title: string; description: string }> = {
   "/dashboard": {
-    title: "Overview",
-    description: "The current state of your studio, from real data.",
+    title: "Command center",
+    description: "The real state of your studio, from live database data.",
   },
-  "/dashboard/leads": {
-    title: "Leads",
-    description: "Businesses you're tracking as potential engagements.",
+  "/dashboard/pipeline": {
+    title: "Pipeline",
+    description: "Businesses moving from discovery to closed engagements.",
+  },
+  "/dashboard/campaigns": {
+    title: "Campaigns",
+    description: "Outreach and discovery campaigns by market and region.",
   },
   "/dashboard/websites": {
     title: "Websites",

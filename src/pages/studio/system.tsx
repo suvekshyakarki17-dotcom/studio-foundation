@@ -165,7 +165,7 @@ function SystemHealthContent() {
 
         <CheckCard
           title="Integrations"
-          description="Provider slots reserved for later phases. None are connected in Phase 1 — this list is honest about that."
+          description="Provider slots reserved for later phases. None are connected yet — this list is honest about that."
         >
           {report.providers.length === 0 ? (
             <p className="text-sm text-muted-foreground">

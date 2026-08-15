@@ -6,14 +6,14 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { Building2, Contact, Globe } from "lucide-react";
+import { Building2, Contact, Globe, Megaphone } from "lucide-react";
 import { useNavigate } from "react-router";
 import type { CreateTarget } from "./nav";
 import { NAV_ITEMS } from "./nav";
 
 /**
- * Command palette (⌘K / Ctrl+K). Only commands that actually work in
- * Phase 1: navigation to real routes and the three real create actions.
+ * Command palette (⌘K / Ctrl+K). Only commands that actually work:
+ * navigation to real routes and the four real create actions.
  */
 export function CommandMenu({
   open,
@@ -54,14 +54,24 @@ export function CommandMenu({
         </CommandGroup>
         <CommandGroup heading="Actions">
           <CommandItem
-            value="New lead Create lead"
+            value="New business Add to pipeline Create business"
             onSelect={() => {
               close();
-              onCreate("lead");
+              onCreate("business");
             }}
           >
             <Contact className="size-4" />
-            New lead
+            New business
+          </CommandItem>
+          <CommandItem
+            value="New campaign Create campaign"
+            onSelect={() => {
+              close();
+              onCreate("campaign");
+            }}
+          >
+            <Megaphone className="size-4" />
+            New campaign
           </CommandItem>
           <CommandItem
             value="New client Create client"

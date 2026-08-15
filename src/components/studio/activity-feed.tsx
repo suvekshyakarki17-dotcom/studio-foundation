@@ -36,7 +36,7 @@ export function ActivityFeed({
         description={
           type
             ? "Events of this kind will appear here when they happen."
-            : "Real operations — creating leads, clients, and projects — will appear here."
+            : "Real operations — creating businesses, campaigns, clients, and projects — will appear here."
         }
         className="py-10"
       />

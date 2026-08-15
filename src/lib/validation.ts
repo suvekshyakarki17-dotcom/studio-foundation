@@ -7,9 +7,13 @@
  */
 import { z } from "zod";
 import {
+  BUSINESS_SOURCES,
+  CAMPAIGN_STATUSES,
   CLIENT_STATUSES,
   LEAD_STATUSES,
+  PIPELINE_STAGES,
   PROJECT_STATUSES,
+  WEBSITE_STATES,
 } from "@/shared/domain";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -44,6 +48,29 @@ const optionalEmail = z
       ctx.addIssue({ code: "custom", message: "Enter a valid email address." });
     }
   });
+
+/** Optional select value: empty string becomes undefined. */
+function optionalSelect() {
+  return z
+    .string()
+    .trim()
+    .optional()
+    .transform((value) => (value === "" ? undefined : value));
+}
+
+/** Optional 0-100 score: empty becomes undefined, then coerced to a number. */
+const optionalScore = z.preprocess(
+  (value) => {
+    if (value === "" || value === null || value === undefined) return undefined;
+    return Number(value);
+  },
+  z
+    .number()
+    .int("Score must be a whole number.")
+    .min(0, "Score must be between 0 and 100.")
+    .max(100, "Score must be between 0 and 100.")
+    .optional(),
+);
 
 export const leadFormSchema = z.object({
   company: requiredName("Company name", 120),
@@ -92,10 +119,47 @@ export const projectEditSchema = projectFormSchema.extend({
 });
 export type ProjectEditValues = z.infer<typeof projectEditSchema>;
 
+export const businessFormSchema = z.object({
+  company: requiredName("Company name", 120),
+  contactName: optionalText(120),
+  email: optionalEmail,
+  phone: optionalText(40),
+  website: optionalText(200),
+  websiteState: z.enum(WEBSITE_STATES),
+  source: z.enum(BUSINESS_SOURCES),
+  marketCode: optionalSelect(),
+  region: optionalSelect(),
+  campaignId: optionalSelect(),
+  score: optionalScore,
+  notes: optionalText(1000),
+});
+export type BusinessFormValues = z.infer<typeof businessFormSchema>;
+
+export const businessEditSchema = businessFormSchema.extend({
+  stage: z.enum(PIPELINE_STAGES),
+});
+export type BusinessEditValues = z.infer<typeof businessEditSchema>;
+
+export const campaignFormSchema = z.object({
+  name: requiredName("Campaign name", 140),
+  description: optionalText(1000),
+  marketCode: optionalSelect(),
+  region: optionalSelect(),
+  targetKeywords: optionalText(300),
+});
+export type CampaignFormValues = z.infer<typeof campaignFormSchema>;
+
+export const campaignEditSchema = campaignFormSchema.extend({
+  status: z.enum(CAMPAIGN_STATUSES),
+});
+export type CampaignEditValues = z.infer<typeof campaignEditSchema>;
+
 export type FormValues =
   | LeadFormValues
   | ClientFormValues
-  | ProjectFormValues;
+  | ProjectFormValues
+  | BusinessFormValues
+  | CampaignFormValues;
 
 /** Pull the first issue message off a ZodError, or a generic fallback. */
 export function firstFormError(error: z.ZodError): string {

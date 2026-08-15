@@ -1,11 +1,12 @@
 import { api } from "@/convex/_generated/api";
 import { useMutation } from "convex/react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Outlet } from "react-router";
-import { APP_VERSION } from "@/shared/domain";
+import { PHASE_LABEL } from "@/shared/domain";
+import { BusinessFormDialog } from "./business-form-dialog";
+import { CampaignFormDialog } from "./campaign-form-dialog";
 import { ClientFormDialog } from "./client-form-dialog";
 import { CommandMenu } from "./command-menu";
-import { LeadFormDialog } from "./lead-form-dialog";
 import type { CreateTarget } from "./nav";
 import { ProjectFormDialog } from "./project-form-dialog";
 import { SidebarContent } from "./sidebar";
@@ -21,11 +22,24 @@ export default function AppShell() {
   const [commandOpen, setCommandOpen] = useState(false);
   const [createTarget, setCreateTarget] = useState<CreateTarget | null>(null);
   const recordBoot = useMutation(api.system.recordBoot);
+  const migratePhase1Leads = useMutation(api.migrate.migratePhase1Leads);
+  // Guards against StrictMode double-invoking the effect in development,
+  // which would otherwise fire the migration twice concurrently.
+  const migrationStarted = useRef(false);
 
-  // Idempotent: records the first boot of this deployment.
+  // Idempotent: records the first boot of this deployment and seeds the
+  // market catalog.
   useEffect(() => {
     void recordBoot();
   }, [recordBoot]);
+
+  // Idempotent: migrates any Phase 1 leads into pipeline businesses on
+  // first run, then never again.
+  useEffect(() => {
+    if (migrationStarted.current) return;
+    migrationStarted.current = true;
+    void migratePhase1Leads();
+  }, [migratePhase1Leads]);
 
   // ⌘K / Ctrl+K toggles the command palette.
   useEffect(() => {
@@ -59,7 +73,7 @@ export default function AppShell() {
         </main>
         <footer className="shrink-0 border-t border-border px-6 py-4">
           <p className="text-[11px] text-muted-foreground">
-            Agency Studio · Phase 01 — Foundation · v{APP_VERSION}
+            Agency Studio · {PHASE_LABEL}
           </p>
         </footer>
       </div>
@@ -71,8 +85,12 @@ export default function AppShell() {
       />
 
       {/* Shell-owned create dialogs; edit dialogs live on their pages. */}
-      <LeadFormDialog
-        open={createTarget === "lead"}
+      <BusinessFormDialog
+        open={createTarget === "business"}
+        onOpenChange={closeCreate}
+      />
+      <CampaignFormDialog
+        open={createTarget === "campaign"}
         onOpenChange={closeCreate}
       />
       <ClientFormDialog

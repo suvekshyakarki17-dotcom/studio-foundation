@@ -3,12 +3,16 @@ import { defineSchema, defineTable } from "convex/server";
 import { Infer, v } from "convex/values";
 import {
   ACTIVITY_TYPES,
+  BUSINESS_SOURCES,
+  CAMPAIGN_STATUSES,
   CLIENT_STATUSES,
   HEALTH_STATUSES,
   LEAD_STATUSES,
+  PIPELINE_STAGES,
   PROJECT_STATUSES,
   PROVIDER_STATUSES,
   PROVIDER_TYPES,
+  WEBSITE_STATES,
 } from "../shared/domain";
 
 // default user roles. can add / remove based on the project as needed
@@ -62,6 +66,26 @@ export const healthStatusValidator = v.union(
 );
 export type HealthStatusValidator = Infer<typeof healthStatusValidator>;
 
+export const pipelineStageValidator = v.union(
+  ...PIPELINE_STAGES.map((stage) => v.literal(stage)),
+);
+export type PipelineStageValidator = Infer<typeof pipelineStageValidator>;
+
+export const campaignStatusValidator = v.union(
+  ...CAMPAIGN_STATUSES.map((status) => v.literal(status)),
+);
+export type CampaignStatusValidator = Infer<typeof campaignStatusValidator>;
+
+export const websiteStateValidator = v.union(
+  ...WEBSITE_STATES.map((state) => v.literal(state)),
+);
+export type WebsiteStateValidator = Infer<typeof websiteStateValidator>;
+
+export const businessSourceValidator = v.union(
+  ...BUSINESS_SOURCES.map((source) => v.literal(source)),
+);
+export type BusinessSourceValidator = Infer<typeof businessSourceValidator>;
+
 const schema = defineSchema(
   {
     // default auth tables using convex auth.
@@ -80,7 +104,70 @@ const schema = defineSchema(
 
     // --- Phase 1 domain tables ---
 
-    /** A business being tracked as a potential engagement. */
+    /** Phase 2 command-center tables */
+
+    /**
+     * The market catalog. Configuration data seeded idempotently from
+     * KNOWN_MARKETS (see src/convex/markets.ts) — not fabricated business
+     * data. Campaigns and businesses reference markets by ISO-ish code.
+     */
+    markets: defineTable({
+      code: v.string(),
+      name: v.string(),
+      flag: v.string(),
+      country: v.string(),
+      regions: v.array(v.string()),
+    }).index("by_code", ["code"]),
+
+    /**
+     * An outreach/discovery campaign targeting a market and region.
+     * Phase 2 records campaigns as operational state; no automation runs
+     * them yet — the operator drives them from the Command Center.
+     */
+    campaigns: defineTable({
+      name: v.string(),
+      description: v.optional(v.string()),
+      status: campaignStatusValidator,
+      marketCode: v.optional(v.string()),
+      region: v.optional(v.string()),
+      targetKeywords: v.optional(v.string()),
+      updatedAt: v.number(),
+    })
+      .index("by_status", ["status"])
+      .index("by_market", ["marketCode"])
+      .index("by_updated", ["updatedAt"]),
+
+    /**
+     * A business being tracked through the pipeline. Every stage change
+     * goes through `businesses.setStage`, which validates transitions via
+     * src/shared/pipeline.ts and writes a real activity row.
+     */
+    businesses: defineTable({
+      company: v.string(),
+      contactName: v.optional(v.string()),
+      email: v.optional(v.string()),
+      phone: v.optional(v.string()),
+      website: v.optional(v.string()),
+      websiteState: websiteStateValidator,
+      source: businessSourceValidator,
+      marketCode: v.optional(v.string()),
+      region: v.optional(v.string()),
+      stage: pipelineStageValidator,
+      score: v.optional(v.number()),
+      campaignId: v.optional(v.id("campaigns")),
+      convertedClientId: v.optional(v.id("clients")),
+      notes: v.optional(v.string()),
+      updatedAt: v.number(),
+    })
+      .index("by_stage", ["stage", "updatedAt"])
+      .index("by_market", ["marketCode"])
+      .index("by_score", ["score"])
+      .index("by_email", ["email"])
+      .index("by_campaign", ["campaignId"])
+      .index("by_updated", ["updatedAt"]),
+
+    /** Legacy Phase 1 lead rows. Kept only as the typed migration source; */
+    /** see src/convex/migrate.ts. No new writes after Phase 2 migration. */
     leads: defineTable({
       company: v.string(),
       name: v.optional(v.string()), // contact name

@@ -11,6 +11,7 @@ import {
   APP_NAME,
   APP_VERSION,
   KNOWN_PROVIDERS,
+  PHASE_LABEL,
   PROVIDER_STATUS_LABELS,
   PROVIDER_STATUS_TONES,
 } from "@/shared/domain";
@@ -70,7 +71,7 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between gap-3">
               <dt className="text-sm text-muted-foreground">Phase</dt>
               <dd className="text-sm font-medium text-foreground">
-                01 — Foundation
+                {PHASE_LABEL}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-3">
@@ -98,8 +99,8 @@ export default function SettingsPage() {
             </h2>
             <p className="mt-1 text-xs leading-5 text-muted-foreground">
               Provider slots reserved by the architecture. None are connected
-              in Phase 1 — connecting them belongs to later phases, and the
-              UI will only ever show what is actually configured.
+              yet — connecting them belongs to later phases, and the UI will
+              only ever show what is actually configured.
             </p>
           </div>
           <div className="grid grid-cols-1 gap-x-8 gap-y-4 px-5 py-5 sm:grid-cols-2">

@@ -11,7 +11,7 @@ import {
 } from "framer-motion";
 import { ArrowRight, Contact, Database, Globe, ShieldCheck } from "lucide-react";
 import { Link } from "react-router";
-import { APP_NAME, APP_VERSION } from "@/shared/domain";
+import { APP_NAME, APP_VERSION, PHASE_LABEL } from "@/shared/domain";
 
 const fadeUp: Variants = {
   hidden: { opacity: 0, y: 16 },
@@ -79,15 +79,16 @@ export default function Landing() {
             className="mx-auto w-full max-w-6xl px-4 py-20 text-center sm:px-6 sm:py-28"
           >
             <p className="mx-auto w-fit rounded-sm border border-border px-3 py-1 text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-              {APP_NAME} — Phase 01 · Foundation
+              {APP_NAME} — {PHASE_LABEL}
             </p>
             <h1 className="mx-auto mt-8 max-w-3xl font-display text-4xl leading-[1.1] tracking-tight text-balance sm:text-6xl">
               A private operating system for a modern web agency.
             </h1>
             <p className="mx-auto mt-6 max-w-xl text-base leading-7 text-muted-foreground sm:text-lg">
-              One operator, one command center. {APP_NAME} is built to run a
-              web agency alone — starting with a real, verifiable foundation
-              that later phases extend without a rewrite.
+              One operator, one command center. {APP_NAME} runs the agency
+              from a real, verifiable command center — pipeline, campaigns,
+              clients, and projects — that later phases extend without a
+              rewrite.
             </p>
             <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
               <Link to={studioHref}>
@@ -130,7 +131,7 @@ export default function Landing() {
                 index="01"
                 title="Command center"
                 icon={Globe}
-                body="A precise application shell — sidebar, command palette, real navigation — with leads, websites, and clients managed against a real database."
+                body="A precise application shell — sidebar, command palette, real navigation — with a business pipeline, market-targeted campaigns, websites, and clients managed against a real database."
               />
               <Panel
                 index="02"
@@ -159,15 +160,16 @@ export default function Landing() {
             >
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-[0.2em] text-muted-foreground">
-                  Phase 01
+                  Phase 02
                 </p>
                 <h2 className="mt-3 font-display text-3xl tracking-tight text-balance">
                   What exists today
                 </h2>
                 <p className="mt-4 max-w-md text-sm leading-6 text-muted-foreground">
-                  The foundation is real and verified: authentication, a
-                  durable database with migrations, strict types, health
-                  checks, CRUD, and an activity log.
+                  The command center is real and verified: authentication, a
+                  durable database, a business pipeline with enforced stage
+                  transitions, market-targeted campaigns, health checks,
+                  CRUD, and an activity log.
                 </p>
                 <ul className="mt-8 space-y-0 border-t border-border">
                   {FOUNDATION_ITEMS.map((item, index) => (
@@ -193,7 +195,7 @@ export default function Landing() {
                 </h2>
                 <p className="mt-4 max-w-md text-sm leading-6 text-muted-foreground">
                   Later phases add these systems on top of this foundation.
-                  Phase 1 never pretends they exist.
+                  The studio never pretends they exist.
                 </p>
                 <ul className="mt-8 space-y-0 border-t border-border">
                   {SCOPE_ITEMS.map((item, index) => (
@@ -254,7 +256,7 @@ export default function Landing() {
       <footer className="border-t border-border">
         <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 px-4 py-6 text-xs text-muted-foreground sm:flex-row sm:px-6">
           <p>
-            {APP_NAME} — Phase 01 · Foundation · v{APP_VERSION}
+            {APP_NAME} — {PHASE_LABEL} · v{APP_VERSION}
           </p>
           <p className="flex items-center gap-2">
             <Contact className="size-3.5" />
@@ -318,7 +320,9 @@ const FOUNDATION_ITEMS = [
   "Real authentication — email OTP and guest sign-in",
   "Durable Convex database with a versioned schema and migrations",
   "Health checks that verify the database before calling anything healthy",
-  "Leads, websites, and clients with full create, edit, and delete flows",
+  "A business pipeline with enforced stage transitions, scoring, and one-click client conversion",
+  "Campaigns targeting markets and regions from a seeded catalog",
+  "Phase 1 leads migrated into the pipeline automatically — once, idempotently",
   "An activity log written only by real operations",
   "Strict TypeScript, validated inputs, and structured server logging",
 ];

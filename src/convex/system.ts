@@ -33,7 +33,10 @@ export const meta = query({
   },
 });
 
-/** Idempotent: records the first time the studio was booted. */
+/**
+ * Idempotent: records the first time the studio was booted and seeds the
+ * market catalog (also idempotent) so forms and filters have real data.
+ */
 export const recordBoot = mutation({
   args: {},
   handler: async (ctx) => {
@@ -47,6 +50,7 @@ export const recordBoot = mutation({
         firstSeenAt: Date.now(),
       });
     }
+    await ctx.runMutation(internal.markets.ensure);
   },
 });
 

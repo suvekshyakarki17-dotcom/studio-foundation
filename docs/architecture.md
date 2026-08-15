@@ -1,8 +1,9 @@
 # Agency Studio — Architecture
 
-Phase 02 (Command Center & Core Operations) builds on the Phase 01
-foundation. This document describes what actually exists. Future-phase
-systems are called out as *boundaries*, not features.
+Phase 03 (Discovery Engine) builds on Phase 02 (Command Center & Core
+Operations), which built on the Phase 01 foundation. This document
+describes what actually exists. Future-phase systems are called out as
+*boundaries*, not features.
 
 ## Stack decisions
 
@@ -28,6 +29,7 @@ src/
     lib/             #   errors, logging, activity helpers
     businesses.ts    #   Pipeline businesses: CRUD, setStage, convertToClient
     campaigns.ts     #   Outreach campaigns: CRUD + status + business counts
+    discovery.ts     #   Discovery engine: runs, record import, website checks
     markets.ts       #   Market catalog: list + idempotent seed
     migrate.ts       #   Phase 1 leads -> businesses (idempotent, once)
     clients.ts       #   Clients CRUD + stats (detaches projects on delete)
@@ -41,6 +43,8 @@ src/
                      # (single source of truth)
     pipeline.ts      # Pipeline transition rules (canTransition,
                      # transitionError) used by businesses.setStage
+    discovery/       # Discovery record pipeline: normalize, validate, dedupe,
+                     # enrich (pure, shared with tests)
   lib/
     validation.ts    # Zod form schemas (incl. business + campaign)
     errors.ts        # Safe client-side error extraction
@@ -65,9 +69,9 @@ docs/                # This documentation
   - `/` landing; `/auth` sign-in; `/dashboard` protected shell.
   - `/dashboard` uses `RequireAuth` (preserves `returnTo`) and renders the
     studio `AppShell` with nested routes: Command center (overview),
-    Pipeline, Campaigns, Markets, Websites, Clients, Activity, System
-    health, Settings. `/dashboard/leads` redirects to the pipeline. Every
-    nav link points at a real route.
+    Pipeline, Discovery, Campaigns, Markets, Websites, Clients, Activity,
+    System health, Settings. `/dashboard/leads` redirects to the pipeline.
+    Every nav link points at a real route.
 - **App shell** (`components/studio/app-shell.tsx`): fixed sidebar rail on
   desktop, sheet drawer on mobile, sticky topbar, command palette (⌘K), and
   shell-owned "create" dialogs (business, campaign, client, project). Pages
@@ -104,6 +108,36 @@ per-market coverage — campaigns (including running), businesses, and
 engaged opportunities — and deep-links into the pipeline and campaigns
 via `?market=…` URL parameters, which those pages read on load.
 
+## Discovery engine
+
+Discovery is real execution with honest accounting, not placeholder data:
+
+- **Runs** (`discovery.runsList` / `runsGet`): campaign-scoped executions
+  with a status model (`QUEUED | RUNNING | COMPLETED | PARTIAL | FAILED |
+  CANCELLED`), requested/processed counts, per-outcome counters, and
+  terminal transitions guarded by `canRunTransition`.
+- **Record pipeline** (`src/shared/discovery/`): pure functions shared
+  between backend and tests — normalization (trim/lowercase, URL
+  canonicalization), validation (required company, plausible email/website),
+  deduplication (against existing businesses by normalized name, website,
+  or email, with a signal label), and enrichment (confidence + source
+  tagging). Every accepted record becomes a real pipeline business with
+  provenance (`discoveryRunId`, `discoveredAt`, `source`, `confidence`).
+- **CSV import** (`discovery.start` + `submitRecords`): batches are atomic
+  and idempotent via client-supplied `batchId`s; the run advances honestly
+  and syncs campaign status on completion.
+- **Providers**: a working `csv-import` provider; every other provider slot
+  stays `NOT_CONFIGURED` until something real is connected — no fake
+  integrations.
+- **Website checks** (`discovery.checkWebsite`, an action): fetches a
+  business's URL with a bounded timeout and records the honest reachability
+  outcome (`HAS_WEBSITE | NO_WEBSITE | UNREACHABLE | BLOCKED | INVALID_URL |
+  CHECK_FAILED`) plus HTTP status.
+
+All run/result mutations authenticate, validate, write atomically, record
+activity entries, and log structured lines — same discipline as the other
+entity modules.
+
 ## Backend architecture
 
 - **Modules by entity**: each entity (businesses, campaigns, markets,
@@ -135,9 +169,10 @@ via `?market=…` URL parameters, which those pages read on load.
   `bunx convex dev --once` (the project's migration mechanism). Schema
   changes are code-reviewed like any other change and applied to all
   environments the same way.
-- Tables: `businesses`, `campaigns`, `markets`, `leads` (migration source
-  only), `clients`, `projects`, `activity`, `providers`, `systemMeta`,
-  plus the Convex Auth tables.
+- Tables: `businesses`, `campaigns`, `markets`, `discoveryRuns`,
+  `discoveryResults`, `leads` (migration source only), `clients`,
+  `projects`, `activity`, `providers`, `systemMeta`, plus the Convex Auth
+  tables.
 - Conventions: indexed lookups (`by_stage`, `by_market`, `by_email`,
   `by_campaign`, `by_status`, ...), timestamps via `_creationTime` plus
   explicit `updatedAt`, optional fields stored as `undefined` (never empty
@@ -184,16 +219,18 @@ count). The topbar chip reflects `system.dbPing` live. Nothing claims
   gitignored; CI fails on lint/type errors.
 - Rendering is plain React (no `dangerouslySetInnerHTML` anywhere).
 
-## Boundaries (deliberately NOT in Phase 2)
+## Boundaries (deliberately NOT in Phase 3)
 
 The architecture leaves room for these without implementing them:
 
-- Intelligence / discovery / scraping (later phases) — no scraping code;
-  businesses carry a `source` + `websiteState` for future automated
-  assessment, but Phase 2 only records operator input.
+- External discovery providers (later phases) — only `csv-import` is real
+  today; AI/scraping providers are reserved slots that stay
+  `NOT_CONFIGURED` until real integrations exist. Businesses carry
+  `source` + `confidence` provenance for when they do.
 - Outreach (later phase) — campaigns are operator-driven records; no
   sending of any kind.
-- Website Factory (later phase) — no generation/deployment.
+- Website Factory (later phase) — reachability checks are real; no
+  generation/deployment.
 - Repository Lab, Agency Director, payments — not modeled yet; sidebar
   shows these modules as "Soon".
 

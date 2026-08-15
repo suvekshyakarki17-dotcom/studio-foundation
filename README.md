@@ -1,15 +1,20 @@
 # Agency Studio
 
 A private, AI-first operating system for running a modern web agency alone —
-built on **Phase 01: Foundation** and now at **Phase 02: Command Center & Core
-Operations**.
+built on **Phase 01: Foundation**, **Phase 02: Command Center & Core
+Operations**, and now at **Phase 03: Discovery Engine**.
 
-Phase 2 turns the foundation into a genuinely usable agency operations
+Phase 2 turned the foundation into a genuinely usable agency operations
 command center: a real pipeline of businesses moving from discovery to won
 engagements, campaigns targeting markets and regions, client conversion,
 search and filtering, and an overview driven entirely by live database
 state. Phase 1's leads are migrated into the pipeline automatically (once,
 idempotently) on first boot.
+
+Phase 3 adds the **Discovery Engine**: real discovery runs bound to
+campaigns, per-record validation/normalization/deduplication with honest
+outcomes, CSV batch import, and real website reachability checks — every
+number comes from actual execution, never fabrication.
 
 Everything is real and verified, not a mockup: authentication, a durable
 database with a versioned schema, strict types, health checks that only
@@ -61,9 +66,35 @@ them (see `docs/architecture.md`).
   responsive tables/cards
 - Strict TypeScript, typed errors, structured logging, request-safe
   messages, no secrets in the client
-- 27 unit tests, lint, typecheck, production build, and CI
+- 77 unit tests, lint, typecheck, production build, and CI
 - Documentation: `docs/architecture.md`, `docs/development.md`,
   `docs/environment.md`, `docs/testing.md`
+
+## What Phase 3 includes
+
+- **Discovery runs**: campaign-scoped runs with real statuses
+  (queued/running/completed/partial/failed/cancelled), requested vs.
+  processed counts, per-record outcomes, and audit activity entries
+- **Record pipeline** (`src/shared/discovery/`): normalization, validation,
+  deduplication (by normalized name/website/email against existing
+  businesses), and enrichment — pure, unit-tested logic shared by the
+  backend and tests
+- **CSV import**: client-side parsing, batched, idempotent submission
+  (batch IDs), atomic per batch, with real accepted/duplicate/rejected/
+  failed counts
+- **Providers**: a `csv-import` provider that actually works today; other
+  provider slots stay honestly `NOT_CONFIGURED` until real integrations
+  exist
+- **Website reachability checks**: a real `checkWebsite` action fetches
+  each business's site with a bounded timeout and records the honest
+  outcome (has website / no website / unreachable / blocked / invalid)
+- **Discovery page**: provider cards (configured state + requirements),
+  the new-run panel with campaign deep links (`?campaign=…`), run history
+  with per-run detail and results, result filtering/sorting, and CSV
+  import with live feedback
+- Pipeline integration: accepted records become real pipeline businesses
+  with provenance (run, source, confidence); campaigns surface their
+  discovery readiness and missing fields
 
 ## Getting started
 
@@ -111,8 +142,9 @@ the Convex dashboard, never in the repo. Details in `docs/environment.md`.
 The `/auth` page handles email-OTP and guest sign-in. `/dashboard` is
 protected by `RequireAuth`, which preserves the requested path via
 `?returnTo=...`. All studio routes live under `/dashboard` (`pipeline`,
-`campaigns`, `markets`, `websites`, `clients`, `activity`, `system`,
-`settings`). The legacy `/dashboard/leads` path redirects to the pipeline.
+`discovery`, `campaigns`, `markets`, `websites`, `clients`, `activity`,
+`system`, `settings`). The legacy `/dashboard/leads` path redirects to the
+pipeline.
 
 ## License / notes
 

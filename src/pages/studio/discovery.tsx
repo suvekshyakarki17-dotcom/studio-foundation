@@ -14,7 +14,7 @@ import {
   Square,
   XCircle,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/studio/page-header";
@@ -297,20 +297,30 @@ function NewRunPanel({
   const startDiscovery = useMutation(api.discovery.start);
   const [campaignId, setCampaignId] = useState(preselectCampaignId ?? "");
   const [providerSlug, setProviderSlug] = useState("csv-import");
-  const [targetCount, setTargetCount] = useState("");
+  const [targetCount, setTargetCount] = useState(() => {
+    // The panel only mounts once campaigns have loaded, so a deep-linked
+    // campaign's target can be adopted as the initial value directly.
+    const campaign = campaigns.find(
+      (item) => item._id === preselectCampaignId,
+    );
+    return campaign?.targetCount ? String(campaign.targetCount) : "";
+  });
   const [notes, setNotes] = useState("");
   const [starting, setStarting] = useState(false);
 
-  // When the page is deep-linked to a campaign, adopt its target count.
-  useEffect(() => {
-    if (preselectCampaignId) {
-      setCampaignId(preselectCampaignId);
-      const campaign = campaigns.find(
-        (item) => item._id === preselectCampaignId,
-      );
-      if (campaign?.targetCount) setTargetCount(String(campaign.targetCount));
-    }
-  }, [preselectCampaignId, campaigns]);
+  // Adjust state during render when the deep-link target changes (the
+  // documented pattern for syncing state to a prop — never in an effect).
+  const [prevPreselectCampaignId, setPrevPreselectCampaignId] = useState(
+    preselectCampaignId,
+  );
+  if (preselectCampaignId !== prevPreselectCampaignId) {
+    setPrevPreselectCampaignId(preselectCampaignId);
+    setCampaignId(preselectCampaignId ?? "");
+    const campaign = campaigns.find(
+      (item) => item._id === preselectCampaignId,
+    );
+    if (campaign?.targetCount) setTargetCount(String(campaign.targetCount));
+  }
 
   const campaign = campaigns.find((item) => item._id === campaignId) ?? null;
   const provider =

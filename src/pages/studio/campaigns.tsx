@@ -4,7 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import { Megaphone, Pencil, Plus, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { useOutletContext } from "react-router";
+import { useOutletContext, useSearchParams } from "react-router";
 import type { StudioOutletContext } from "@/components/studio/app-shell";
 import { CampaignFormDialog } from "@/components/studio/campaign-form-dialog";
 import { DeleteConfirm } from "@/components/studio/delete-confirm";
@@ -38,6 +38,7 @@ import {
   CAMPAIGN_STATUSES,
   CAMPAIGN_STATUS_LABELS,
   CAMPAIGN_STATUS_TONES,
+  KNOWN_MARKETS,
   type CampaignStatus,
 } from "@/shared/domain";
 import { StatusBadge } from "@/components/studio/status-badge";
@@ -46,12 +47,21 @@ const ALL = "ALL";
 
 function CampaignsContent() {
   const { openCreate } = useOutletContext<StudioOutletContext>();
+  const [searchParams] = useSearchParams();
+  const urlMarket = searchParams.get("market");
+  const [marketFilter, setMarketFilter] = useState<string | typeof ALL>(
+    () =>
+      urlMarket && KNOWN_MARKETS.some((market) => market.code === urlMarket)
+        ? urlMarket
+        : ALL,
+  );
   const [statusFilter, setStatusFilter] = useState<CampaignStatus | typeof ALL>(
     ALL,
   );
   const [editing, setEditing] = useState<Doc<"campaigns"> | null>(null);
   const campaigns = useQuery(api.campaigns.list, {
     ...(statusFilter === ALL ? {} : { status: statusFilter }),
+    ...(marketFilter === ALL ? {} : { marketCode: marketFilter }),
   });
   const stats = useQuery(api.campaigns.stats);
   const updateCampaign = useMutation(api.campaigns.update);
@@ -86,6 +96,9 @@ function CampaignsContent() {
   if (campaigns === undefined || stats === undefined) {
     return <LoadingState label="Loading campaigns…" className="py-24" />;
   }
+
+  const filterActive =
+    statusFilter !== ALL || marketFilter !== ALL;
 
   return (
     <div className="space-y-8">
@@ -129,7 +142,7 @@ function CampaignsContent() {
         />
       </section>
 
-      {campaigns.length === 0 ? (
+      {campaigns.length === 0 && !filterActive ? (
         <EmptyState
           icon={Megaphone}
           title="No campaigns yet"
@@ -151,28 +164,54 @@ function CampaignsContent() {
             <p className="text-sm text-muted-foreground">
               {campaigns.length} {campaigns.length === 1 ? "campaign" : "campaigns"}
             </p>
-            <Select
-              value={statusFilter}
-              onValueChange={(value) =>
-                setStatusFilter(value as CampaignStatus | typeof ALL)
-              }
-            >
-              <SelectTrigger size="sm" aria-label="Filter by status">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>All statuses</SelectItem>
-                {CAMPAIGN_STATUSES.map((status) => (
-                  <SelectItem key={status} value={status}>
-                    {CAMPAIGN_STATUS_LABELS[status]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="flex flex-wrap items-center gap-3">
+              <Select
+                value={marketFilter}
+                onValueChange={(value) =>
+                  setMarketFilter(value as string | typeof ALL)
+                }
+              >
+                <SelectTrigger size="sm" aria-label="Filter by market">
+                  <SelectValue placeholder="All markets" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All markets</SelectItem>
+                  {KNOWN_MARKETS.map((market) => (
+                    <SelectItem key={market.code} value={market.code}>
+                      {market.flag} {market.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={statusFilter}
+                onValueChange={(value) =>
+                  setStatusFilter(value as CampaignStatus | typeof ALL)
+                }
+              >
+                <SelectTrigger size="sm" aria-label="Filter by status">
+                  <SelectValue placeholder="All statuses" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All statuses</SelectItem>
+                  {CAMPAIGN_STATUSES.map((status) => (
+                    <SelectItem key={status} value={status}>
+                      {CAMPAIGN_STATUS_LABELS[status]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
-          {/* Desktop table */}
-          <div className="hidden md:block">
+          {campaigns.length === 0 ? (
+            <p className="px-5 py-16 text-center text-sm text-muted-foreground">
+              No campaigns match the current filters.
+            </p>
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div className="hidden md:block">
             <Table>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
@@ -309,6 +348,8 @@ function CampaignsContent() {
               </li>
             ))}
           </ul>
+            </>
+          )}
         </section>
       )}
 

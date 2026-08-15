@@ -83,13 +83,19 @@ function PipelineContent() {
   const { openCreate } = useOutletContext<StudioOutletContext>();
   const [searchParams] = useSearchParams();
   const urlStage = searchParams.get("stage");
+  const urlMarket = searchParams.get("market");
   const [stageFilter, setStageFilter] = useState<PipelineStage | typeof ALL>(
     () =>
       urlStage && PIPELINE_STAGES.includes(urlStage as PipelineStage)
         ? (urlStage as PipelineStage)
         : ALL,
   );
-  const [marketFilter, setMarketFilter] = useState<string | typeof ALL>(ALL);
+  const [marketFilter, setMarketFilter] = useState<string | typeof ALL>(
+    () =>
+      urlMarket && KNOWN_MARKETS.some((market) => market.code === urlMarket)
+        ? urlMarket
+        : ALL,
+  );
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search);
   const [editing, setEditing] = useState<Doc<"businesses"> | null>(null);

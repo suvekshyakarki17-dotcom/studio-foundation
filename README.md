@@ -47,6 +47,9 @@ them (see `docs/architecture.md`).
   keywords, and attached-business counts
 - **Market catalog**: seeded idempotently from `KNOWN_MARKETS` (US, CA, GB,
   NP with full region lists), used by campaign and business forms
+- **Markets page**: the catalog with live per-market coverage — campaigns
+  (including running), businesses, and engaged opportunities — plus
+  drill-downs into filtered pipeline and campaign views
 - **Phase 1 → Phase 2 migration**: `leads` are imported into the pipeline
   once (idempotent, email-deduplicated), then the legacy table is unused
 - Real CRUD for **Websites (projects)** and **Clients** with server-side
@@ -108,8 +111,8 @@ the Convex dashboard, never in the repo. Details in `docs/environment.md`.
 The `/auth` page handles email-OTP and guest sign-in. `/dashboard` is
 protected by `RequireAuth`, which preserves the requested path via
 `?returnTo=...`. All studio routes live under `/dashboard` (`pipeline`,
-`campaigns`, `websites`, `clients`, `activity`, `system`, `settings`).
-The legacy `/dashboard/leads` path redirects to the pipeline.
+`campaigns`, `markets`, `websites`, `clients`, `activity`, `system`,
+`settings`). The legacy `/dashboard/leads` path redirects to the pipeline.
 
 ## License / notes
 

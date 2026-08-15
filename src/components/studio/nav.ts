@@ -6,6 +6,7 @@ import {
   Globe,
   History,
   LayoutGrid,
+  Map as MapIcon,
   Megaphone,
   PenTool,
   Send,
@@ -34,6 +35,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/dashboard", label: "Command center", icon: LayoutGrid, end: true },
       { to: "/dashboard/pipeline", label: "Pipeline", icon: Contact },
       { to: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone },
+      { to: "/dashboard/markets", label: "Markets", icon: MapIcon },
       { to: "/dashboard/websites", label: "Websites", icon: Globe },
       { to: "/dashboard/clients", label: "Clients", icon: Building2 },
     ],
@@ -75,6 +77,10 @@ export const PAGE_META: Record<string, { title: string; description: string }> =
   "/dashboard/campaigns": {
     title: "Campaigns",
     description: "Outreach and discovery campaigns by market and region.",
+  },
+  "/dashboard/markets": {
+    title: "Markets",
+    description: "The market catalog — coverage per market from the database.",
   },
   "/dashboard/websites": {
     title: "Websites",

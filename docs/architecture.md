@@ -65,9 +65,9 @@ docs/                # This documentation
   - `/` landing; `/auth` sign-in; `/dashboard` protected shell.
   - `/dashboard` uses `RequireAuth` (preserves `returnTo`) and renders the
     studio `AppShell` with nested routes: Command center (overview),
-    Pipeline, Campaigns, Websites, Clients, Activity, System health,
-    Settings. `/dashboard/leads` redirects to the pipeline. Every nav link
-    points at a real route.
+    Pipeline, Campaigns, Markets, Websites, Clients, Activity, System
+    health, Settings. `/dashboard/leads` redirects to the pipeline. Every
+    nav link points at a real route.
 - **App shell** (`components/studio/app-shell.tsx`): fixed sidebar rail on
   desktop, sheet drawer on mobile, sticky topbar, command palette (⌘K), and
   shell-owned "create" dialogs (business, campaign, client, project). Pages
@@ -97,7 +97,12 @@ company, contact, email, and website; changes stage inline (enforced by
 `src/shared/pipeline.ts`); scores opportunities 0–100 (70+ = high
 priority); and converts a business to a client (creates a real client row
 and closes the record as WON). Campaigns target a market and region from
-the seeded catalog and count attached businesses.
+the seeded catalog, count attached businesses, and filter by market.
+
+The Markets page (`markets.overview`) renders the catalog with real
+per-market coverage — campaigns (including running), businesses, and
+engaged opportunities — and deep-links into the pipeline and campaigns
+via `?market=…` URL parameters, which those pages read on load.
 
 ## Backend architecture
 

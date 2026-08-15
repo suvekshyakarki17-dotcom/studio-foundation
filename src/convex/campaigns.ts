@@ -82,12 +82,19 @@ async function enrichMarkets(
 }
 
 export const list = query({
-  args: { status: v.optional(campaignStatusValidator) },
-  handler: async (ctx, { status }) => {
+  args: {
+    status: v.optional(campaignStatusValidator),
+    marketCode: v.optional(v.string()),
+  },
+  handler: async (ctx, { status, marketCode }) => {
     await requireUser(ctx);
     const campaigns = (
       await ctx.db.query("campaigns").collect()
-    ).filter((campaign) => !status || campaign.status === status);
+    ).filter(
+      (campaign) =>
+        (!status || campaign.status === status) &&
+        (!marketCode || campaign.marketCode === marketCode),
+    );
     campaigns.sort((a, b) => b.updatedAt - a.updatedAt);
 
     const marketMap = await enrichMarkets(ctx, campaigns);

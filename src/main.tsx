@@ -19,6 +19,7 @@ const AppShell = lazy(() => import("./components/studio/app-shell.tsx"));
 const OverviewPage = lazy(() => import("./pages/studio/overview.tsx"));
 const PipelinePage = lazy(() => import("./pages/studio/pipeline.tsx"));
 const CampaignsPage = lazy(() => import("./pages/studio/campaigns.tsx"));
+const MarketsPage = lazy(() => import("./pages/studio/markets.tsx"));
 const WebsitesPage = lazy(() => import("./pages/studio/websites.tsx"));
 const ClientsPage = lazy(() => import("./pages/studio/clients.tsx"));
 const ActivityPage = lazy(() => import("./pages/studio/activity.tsx"));
@@ -142,6 +143,7 @@ createRoot(document.getElementById("root")!).render(
                 <Route index element={<OverviewPage />} />
                 <Route path="pipeline" element={<PipelinePage />} />
                 <Route path="campaigns" element={<CampaignsPage />} />
+                <Route path="markets" element={<MarketsPage />} />
                 <Route
                   path="leads"
                   element={<Navigate to="/dashboard/pipeline" replace />}

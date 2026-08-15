@@ -12,6 +12,7 @@ import {
   CAMPAIGN_STATUSES,
   type CampaignStatus,
 } from "../shared/domain";
+import { discoveryReadiness } from "../shared/discovery";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { recordActivity } from "./lib/activity";
@@ -22,6 +23,18 @@ import { campaignStatusValidator } from "./schema";
 function normalizeText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+/** Validate an optional discovery target count (whole number >= 1). */
+function normalizeTargetCount(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 1) {
+    throw apiError(
+      "VALIDATION",
+      "Target count must be a whole number of at least 1.",
+    );
+  }
+  return value;
 }
 
 /** Validate that a marketCode/region pair refers to a known market region. */
@@ -105,19 +118,24 @@ export const list = query({
         counts.set(business.campaignId, (counts.get(business.campaignId) ?? 0) + 1);
       }
     }
-    return campaigns.map((campaign) => ({
-      ...campaign,
-      businessCount: counts.get(campaign._id) ?? 0,
-      marketName: campaign.marketCode
-        ? marketMap.get(campaign.marketCode)?.name
-        : undefined,
-      marketFlag: campaign.marketCode
-        ? marketMap.get(campaign.marketCode)?.flag
-        : undefined,
-      marketCountry: campaign.marketCode
-        ? marketMap.get(campaign.marketCode)?.country
-        : undefined,
-    }));
+    return campaigns.map((campaign) => {
+      const readiness = discoveryReadiness(campaign);
+      return {
+        ...campaign,
+        businessCount: counts.get(campaign._id) ?? 0,
+        marketName: campaign.marketCode
+          ? marketMap.get(campaign.marketCode)?.name
+          : undefined,
+        marketFlag: campaign.marketCode
+          ? marketMap.get(campaign.marketCode)?.flag
+          : undefined,
+        marketCountry: campaign.marketCode
+          ? marketMap.get(campaign.marketCode)?.country
+          : undefined,
+        discoveryReady: readiness.ready,
+        missingDiscoveryFields: readiness.missing,
+      };
+    });
   },
 });
 
@@ -146,6 +164,9 @@ export const stats = query({
           .map((campaign) => campaign.marketCode)
           .filter((code): code is string => code !== undefined),
       ).size,
+      readyForDiscovery: campaigns.filter(
+        (campaign) => discoveryReadiness(campaign).ready,
+      ).length,
     };
   },
 });
@@ -156,6 +177,9 @@ export const create = mutation({
     description: v.optional(v.string()),
     marketCode: v.optional(v.string()),
     region: v.optional(v.string()),
+    city: v.optional(v.string()),
+    category: v.optional(v.string()),
+    targetCount: v.optional(v.number()),
     targetKeywords: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -176,6 +200,9 @@ export const create = mutation({
       status: "DRAFT",
       marketCode,
       region,
+      city: normalizeText(args.city),
+      category: normalizeText(args.category),
+      targetCount: normalizeTargetCount(args.targetCount),
       targetKeywords: normalizeText(args.targetKeywords),
       updatedAt: Date.now(),
     });
@@ -198,6 +225,9 @@ export const update = mutation({
     description: v.optional(v.string()),
     marketCode: v.optional(v.string()),
     region: v.optional(v.string()),
+    city: v.optional(v.string()),
+    category: v.optional(v.string()),
+    targetCount: v.optional(v.number()),
     targetKeywords: v.optional(v.string()),
     status: v.optional(campaignStatusValidator),
   },
@@ -219,6 +249,9 @@ export const update = mutation({
       description: normalizeText(args.description),
       marketCode,
       region,
+      city: normalizeText(args.city),
+      category: normalizeText(args.category),
+      targetCount: normalizeTargetCount(args.targetCount),
       targetKeywords: normalizeText(args.targetKeywords),
       updatedAt: Date.now(),
     });

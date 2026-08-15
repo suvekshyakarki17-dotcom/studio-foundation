@@ -1,10 +1,14 @@
 import { api } from "@/convex/_generated/api";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useMutation, useQuery } from "convex/react";
-import { Megaphone, Pencil, Plus, Trash2 } from "lucide-react";
+import { Megaphone, Pencil, Plus, Radar, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
-import { useOutletContext, useSearchParams } from "react-router";
+import {
+  useNavigate,
+  useOutletContext,
+  useSearchParams,
+} from "react-router";
 import type { StudioOutletContext } from "@/components/studio/app-shell";
 import { CampaignFormDialog } from "@/components/studio/campaign-form-dialog";
 import { DeleteConfirm } from "@/components/studio/delete-confirm";
@@ -47,6 +51,7 @@ const ALL = "ALL";
 
 function CampaignsContent() {
   const { openCreate } = useOutletContext<StudioOutletContext>();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const urlMarket = searchParams.get("market");
   const [marketFilter, setMarketFilter] = useState<string | typeof ALL>(
@@ -79,6 +84,9 @@ function CampaignsContent() {
         description: campaign.description,
         marketCode: campaign.marketCode,
         region: campaign.region,
+        city: campaign.city,
+        category: campaign.category,
+        targetCount: campaign.targetCount,
         targetKeywords: campaign.targetKeywords,
         status,
       });
@@ -128,7 +136,7 @@ function CampaignsContent() {
         <MetricCard
           label="Running"
           value={stats.running}
-          sub={`${stats.byStatus.READY} ready to start`}
+          sub={`${stats.readyForDiscovery} ready for discovery`}
         />
         <MetricCard
           label="Markets covered"
@@ -230,8 +238,12 @@ function CampaignsContent() {
                       <p className="font-medium text-foreground">
                         {campaign.name}
                       </p>
+                      <DiscoveryReadinessHint
+                        ready={campaign.discoveryReady}
+                        missing={campaign.missingDiscoveryFields}
+                      />
                       {campaign.targetKeywords && (
-                        <p className="max-w-[260px] truncate text-xs text-muted-foreground">
+                        <p className="mt-0.5 max-w-[260px] truncate text-xs text-muted-foreground">
                           {campaign.targetKeywords}
                         </p>
                       )}
@@ -257,6 +269,24 @@ function CampaignsContent() {
                     </TableCell>
                     <TableCell>
                       <div className="flex justify-end gap-1">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          disabled={!campaign.discoveryReady}
+                          className="text-muted-foreground hover:text-foreground"
+                          onClick={() =>
+                            navigate(`/dashboard/discovery?campaign=${campaign._id}`)
+                          }
+                          aria-label={`Start discovery for ${campaign.name}`}
+                          title={
+                            campaign.discoveryReady
+                              ? "Start a discovery run for this campaign"
+                              : `Needs: ${campaign.missingDiscoveryFields.join(", ")}`
+                          }
+                        >
+                          <Radar className="size-4" />
+                        </Button>
                         <Button
                           type="button"
                           variant="ghost"
@@ -299,6 +329,10 @@ function CampaignsContent() {
                     <p className="font-medium text-foreground">
                       {campaign.name}
                     </p>
+                    <DiscoveryReadinessHint
+                      ready={campaign.discoveryReady}
+                      missing={campaign.missingDiscoveryFields}
+                    />
                     <p className="truncate text-xs text-muted-foreground">
                       {campaign.marketCode
                         ? `${campaign.marketFlag ?? ""} ${campaign.marketName ?? campaign.marketCode}${
@@ -319,6 +353,19 @@ function CampaignsContent() {
                     {formatRelativeTime(campaign.updatedAt)}
                   </p>
                   <div className="flex items-center gap-1">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={!campaign.discoveryReady}
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() =>
+                        navigate(`/dashboard/discovery?campaign=${campaign._id}`)
+                      }
+                    >
+                      <Radar className="size-3.5" />
+                      Discover
+                    </Button>
                     <Button
                       type="button"
                       variant="ghost"
@@ -361,6 +408,28 @@ function CampaignsContent() {
         campaign={editing ?? undefined}
       />
     </div>
+  );
+}
+
+function DiscoveryReadinessHint({
+  ready,
+  missing,
+}: {
+  ready: boolean;
+  missing: string[];
+}) {
+  if (ready) {
+    return (
+      <p className="mt-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+        Ready for discovery
+      </p>
+    );
+  }
+  if (missing.length === 0) return null;
+  return (
+    <p className="mt-0.5 text-xs text-muted-foreground">
+      Discovery needs: {missing.join(", ")}
+    </p>
   );
 }
 

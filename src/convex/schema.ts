@@ -2,6 +2,11 @@ import { authTables } from "@convex-dev/auth/server";
 import { defineSchema, defineTable } from "convex/server";
 import { Infer, v } from "convex/values";
 import {
+  DISCOVERY_RESULT_STATUSES,
+  DISCOVERY_RUN_STATUSES,
+  WEBSITE_REACHABILITY_STATES,
+} from "../shared/discovery";
+import {
   ACTIVITY_TYPES,
   BUSINESS_SOURCES,
   CAMPAIGN_STATUSES,
@@ -81,6 +86,69 @@ export const websiteStateValidator = v.union(
 );
 export type WebsiteStateValidator = Infer<typeof websiteStateValidator>;
 
+export const websiteReachabilityValidator = v.union(
+  ...WEBSITE_REACHABILITY_STATES.map((state) => v.literal(state)),
+);
+export type WebsiteReachabilityValidator = Infer<
+  typeof websiteReachabilityValidator
+>;
+
+export const discoveryRunStatusValidator = v.union(
+  ...DISCOVERY_RUN_STATUSES.map((status) => v.literal(status)),
+);
+export type DiscoveryRunStatusValidator = Infer<
+  typeof discoveryRunStatusValidator
+>;
+
+export const discoveryResultStatusValidator = v.union(
+  ...DISCOVERY_RESULT_STATUSES.map((status) => v.literal(status)),
+);
+export type DiscoveryResultStatusValidator = Infer<
+  typeof discoveryResultStatusValidator
+>;
+
+/** Raw provider/operator record snapshot — untrusted, preserved for provenance. */
+export const discoveryRawRecordValidator = v.object({
+  company: v.string(),
+  contactName: v.optional(v.string()),
+  email: v.optional(v.string()),
+  phone: v.optional(v.string()),
+  website: v.optional(v.string()),
+  city: v.optional(v.string()),
+  region: v.optional(v.string()),
+  category: v.optional(v.string()),
+  address: v.optional(v.string()),
+  socials: v.optional(v.array(v.string())),
+  whatsapp: v.optional(v.string()),
+  sourceReference: v.optional(v.string()),
+  notes: v.optional(v.string()),
+});
+export type DiscoveryRawRecordValidator = Infer<typeof discoveryRawRecordValidator>;
+
+/** Canonical view produced by the deterministic normalization pipeline. */
+export const discoveryNormalizedRecordValidator = v.object({
+  company: v.string(),
+  contactName: v.optional(v.string()),
+  email: v.optional(v.string()),
+  phone: v.optional(v.string()),
+  website: v.optional(v.string()),
+  canonicalDomain: v.optional(v.string()),
+  city: v.optional(v.string()),
+  region: v.optional(v.string()),
+  category: v.optional(v.string()),
+  address: v.optional(v.string()),
+  socials: v.optional(v.array(v.string())),
+  whatsapp: v.optional(v.string()),
+  sourceReference: v.optional(v.string()),
+  notes: v.optional(v.string()),
+  websiteStatus: websiteReachabilityValidator,
+  identityKeys: v.array(v.string()),
+  confidence: v.number(),
+});
+export type DiscoveryNormalizedRecordValidator = Infer<
+  typeof discoveryNormalizedRecordValidator
+>;
+
 export const businessSourceValidator = v.union(
   ...BUSINESS_SOURCES.map((source) => v.literal(source)),
 );
@@ -130,6 +198,9 @@ const schema = defineSchema(
       status: campaignStatusValidator,
       marketCode: v.optional(v.string()),
       region: v.optional(v.string()),
+      city: v.optional(v.string()),
+      category: v.optional(v.string()),
+      targetCount: v.optional(v.number()),
       targetKeywords: v.optional(v.string()),
       updatedAt: v.number(),
     })
@@ -149,6 +220,17 @@ const schema = defineSchema(
       phone: v.optional(v.string()),
       website: v.optional(v.string()),
       websiteState: websiteStateValidator,
+      /** Existence/reachability axis (Phase 3). Distinct from websiteState. */
+      websiteStatus: websiteReachabilityValidator,
+      websiteCheckedAt: v.optional(v.number()),
+      websiteHttpStatus: v.optional(v.number()),
+      city: v.optional(v.string()),
+      category: v.optional(v.string()),
+      address: v.optional(v.string()),
+      /** Public profile references legitimately provided by a source. */
+      socials: v.optional(v.array(v.string())),
+      /** Public business WhatsApp reference (stored, never messaged in Phase 3). */
+      whatsapp: v.optional(v.string()),
       source: businessSourceValidator,
       marketCode: v.optional(v.string()),
       region: v.optional(v.string()),
@@ -156,6 +238,13 @@ const schema = defineSchema(
       score: v.optional(v.number()),
       campaignId: v.optional(v.id("campaigns")),
       convertedClientId: v.optional(v.id("clients")),
+      /** Provider confidence in this record's data (0..1) — not an opportunity score. */
+      confidence: v.optional(v.number()),
+      /** Discovery provenance: where this record came from. */
+      discoveredBy: v.optional(v.string()),
+      discoveryRunId: v.optional(v.id("discoveryRuns")),
+      discoveredAt: v.optional(v.number()),
+      sourceReference: v.optional(v.string()),
       notes: v.optional(v.string()),
       updatedAt: v.number(),
     })
@@ -164,6 +253,7 @@ const schema = defineSchema(
       .index("by_score", ["score"])
       .index("by_email", ["email"])
       .index("by_campaign", ["campaignId"])
+      .index("by_discovered", ["discoveredAt"])
       .index("by_updated", ["updatedAt"]),
 
     /** Legacy Phase 1 lead rows. Kept only as the typed migration source; */
@@ -209,6 +299,67 @@ const schema = defineSchema(
       .index("by_status", ["status"])
       .index("by_client", ["clientId"])
       .index("by_updated", ["updatedAt"]),
+
+    /**
+     * A discovery run: an auditable execution of the discovery engine for
+     * one campaign. Counters are derived from real record processing.
+     */
+    discoveryRuns: defineTable({
+      campaignId: v.id("campaigns"),
+      status: discoveryRunStatusValidator,
+      providerSlug: v.string(),
+      providerName: v.string(),
+      /** Configuration snapshot at start (derived from the campaign). */
+      marketCode: v.optional(v.string()),
+      region: v.optional(v.string()),
+      city: v.optional(v.string()),
+      category: v.optional(v.string()),
+      requestedCount: v.number(),
+      discoveredCount: v.number(),
+      acceptedCount: v.number(),
+      duplicateCount: v.number(),
+      rejectedCount: v.number(),
+      failedCount: v.number(),
+      processedCount: v.number(),
+      errorCode: v.optional(v.string()),
+      errorMessage: v.optional(v.string()),
+      cancelledReason: v.optional(v.string()),
+      startedAt: v.optional(v.number()),
+      completedAt: v.optional(v.number()),
+      cancelledAt: v.optional(v.number()),
+      /** Client-generated batch ids already processed (idempotency). */
+      processedBatches: v.array(v.string()),
+      notes: v.optional(v.string()),
+      createdAt: v.number(),
+      updatedAt: v.number(),
+    })
+      .index("by_campaign", ["campaignId", "createdAt"])
+      .index("by_status", ["status", "createdAt"])
+      .index("by_updated", ["updatedAt"]),
+
+    /**
+     * One raw provider result per run: raw snapshot + normalized view +
+     * pipeline outcome (accepted/duplicate/rejected/failed). Raw data is
+     * retained for provenance and debugging, not accumulated without
+     * purpose beyond the run.
+     */
+    discoveryResults: defineTable({
+      runId: v.id("discoveryRuns"),
+      providerSlug: v.string(),
+      status: discoveryResultStatusValidator,
+      raw: discoveryRawRecordValidator,
+      normalized: v.optional(discoveryNormalizedRecordValidator),
+      businessId: v.optional(v.id("businesses")),
+      duplicateOf: v.optional(v.id("businesses")),
+      duplicateSignal: v.optional(v.string()),
+      rejectionReason: v.optional(v.string()),
+      confidence: v.optional(v.number()),
+      retrievedAt: v.number(),
+      createdAt: v.number(),
+    })
+      .index("by_run", ["runId", "createdAt"])
+      .index("by_business", ["businessId"])
+      .index("by_status", ["status"]),
 
     /** Append-only log of real events; written only by actual operations. */
     activity: defineTable({

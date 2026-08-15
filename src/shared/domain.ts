@@ -9,9 +9,9 @@
  */
 
 export const APP_NAME = "Agency Studio";
-export const APP_VERSION = "0.2.0";
+export const APP_VERSION = "0.3.0";
 export const WORKSPACE_NAME = "Agency Studio";
-export const PHASE_LABEL = "Phase 02 · Command Center";
+export const PHASE_LABEL = "Phase 03 · Discovery & Lead Intelligence";
 
 /* -------------------------------- Pipeline -------------------------------- */
 
@@ -323,6 +323,7 @@ export const BUSINESS_SOURCES = [
   "WEBSITE_RESEARCH",
   "SOCIAL",
   "PHASE1_MIGRATION",
+  "DISCOVERY",
   "OTHER",
 ] as const;
 export type BusinessSource = (typeof BUSINESS_SOURCES)[number];
@@ -334,6 +335,7 @@ export const BUSINESS_SOURCE_LABELS: Record<BusinessSource, string> = {
   WEBSITE_RESEARCH: "Website research",
   SOCIAL: "Social profile",
   PHASE1_MIGRATION: "Phase 1 migration",
+  DISCOVERY: "Discovery import",
   OTHER: "Other",
 };
 
@@ -423,6 +425,14 @@ export const ACTIVITY_TYPES = [
   "LEAD_CREATED",
   "LEAD_UPDATED",
   "LEAD_DELETED",
+  // Discovery (Phase 3)
+  "DISCOVERY_STARTED",
+  "DISCOVERY_RECORDS_IMPORTED",
+  "DISCOVERY_COMPLETED",
+  "DISCOVERY_PARTIAL",
+  "DISCOVERY_FAILED",
+  "DISCOVERY_CANCELLED",
+  "DISCOVERY_WEBSITE_CHECKED",
   // System
   "SYSTEM_EVENT",
 ] as const;
@@ -447,6 +457,13 @@ export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
   LEAD_CREATED: "Lead created",
   LEAD_UPDATED: "Lead updated",
   LEAD_DELETED: "Lead deleted",
+  DISCOVERY_STARTED: "Discovery started",
+  DISCOVERY_RECORDS_IMPORTED: "Records imported",
+  DISCOVERY_COMPLETED: "Discovery completed",
+  DISCOVERY_PARTIAL: "Discovery partially completed",
+  DISCOVERY_FAILED: "Discovery failed",
+  DISCOVERY_CANCELLED: "Discovery cancelled",
+  DISCOVERY_WEBSITE_CHECKED: "Website status checked",
   SYSTEM_EVENT: "System event",
 };
 

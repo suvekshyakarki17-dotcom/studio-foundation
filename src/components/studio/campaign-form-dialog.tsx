@@ -84,6 +84,9 @@ export function CampaignFormDialog({
       description: data.get("description"),
       marketCode,
       region,
+      city: data.get("city"),
+      category: data.get("category"),
+      targetCount: data.get("targetCount"),
       targetKeywords: data.get("targetKeywords"),
     };
     const parsed = (isEdit ? campaignEditSchema : campaignFormSchema).safeParse({
@@ -104,6 +107,9 @@ export function CampaignFormDialog({
           description: parsed.data.description,
           marketCode: parsed.data.marketCode,
           region: parsed.data.region,
+          city: parsed.data.city,
+          category: parsed.data.category,
+          targetCount: parsed.data.targetCount,
           targetKeywords: parsed.data.targetKeywords,
           status,
         });
@@ -114,6 +120,9 @@ export function CampaignFormDialog({
           description: parsed.data.description,
           marketCode: parsed.data.marketCode,
           region: parsed.data.region,
+          city: parsed.data.city,
+          category: parsed.data.category,
+          targetCount: parsed.data.targetCount,
           targetKeywords: parsed.data.targetKeywords,
         });
         toast(`Campaign created — ${parsed.data.name}`);
@@ -199,6 +208,43 @@ export function CampaignFormDialog({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="campaign-city">Location (city)</Label>
+              <Input
+                id="campaign-city"
+                name="city"
+                placeholder="Miami"
+                defaultValue={campaign?.city ?? ""}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="campaign-category">Business category</Label>
+              <Input
+                id="campaign-category"
+                name="category"
+                placeholder="Restaurants"
+                defaultValue={campaign?.category ?? ""}
+              />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="campaign-target-count">Target count</Label>
+            <Input
+              id="campaign-target-count"
+              name="targetCount"
+              type="number"
+              min={1}
+              step={1}
+              placeholder="100"
+              defaultValue={campaign?.targetCount ?? ""}
+            />
+            <p className="text-xs text-muted-foreground">
+              How many businesses the discovery engine should aim for. Together
+              with market, region, location, and category, this makes the
+              campaign ready to start discovery.
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="campaign-keywords">Target keywords</Label>

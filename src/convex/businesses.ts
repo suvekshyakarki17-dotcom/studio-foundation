@@ -233,6 +233,7 @@ export const create = mutation({
       phone: normalizeText(args.phone),
       website: normalizeText(args.website),
       websiteState: args.websiteState ?? "UNKNOWN",
+      websiteStatus: "UNKNOWN",
       source: args.source ?? "MANUAL",
       marketCode,
       region,

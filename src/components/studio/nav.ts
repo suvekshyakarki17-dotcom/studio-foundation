@@ -9,6 +9,7 @@ import {
   Map as MapIcon,
   Megaphone,
   PenTool,
+  Radar,
   Send,
   Settings,
   Sparkles,
@@ -35,6 +36,7 @@ export const NAV_SECTIONS: NavSection[] = [
       { to: "/dashboard", label: "Command center", icon: LayoutGrid, end: true },
       { to: "/dashboard/pipeline", label: "Pipeline", icon: Contact },
       { to: "/dashboard/campaigns", label: "Campaigns", icon: Megaphone },
+      { to: "/dashboard/discovery", label: "Discovery", icon: Radar },
       { to: "/dashboard/markets", label: "Markets", icon: MapIcon },
       { to: "/dashboard/websites", label: "Websites", icon: Globe },
       { to: "/dashboard/clients", label: "Clients", icon: Building2 },
@@ -77,6 +79,10 @@ export const PAGE_META: Record<string, { title: string; description: string }> =
   "/dashboard/campaigns": {
     title: "Campaigns",
     description: "Outreach and discovery campaigns by market and region.",
+  },
+  "/dashboard/discovery": {
+    title: "Discovery",
+    description: "The discovery engine — real runs, real results, honest status.",
   },
   "/dashboard/markets": {
     title: "Markets",

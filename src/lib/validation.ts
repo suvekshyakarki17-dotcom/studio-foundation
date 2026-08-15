@@ -140,11 +140,28 @@ export const businessEditSchema = businessFormSchema.extend({
 });
 export type BusinessEditValues = z.infer<typeof businessEditSchema>;
 
+/** Optional whole-number target (1..100,000); empty becomes undefined. */
+const optionalTargetCount = z.preprocess(
+  (value) => {
+    if (value === "" || value === null || value === undefined) return undefined;
+    return Number(value);
+  },
+  z
+    .number()
+    .int("Target count must be a whole number.")
+    .min(1, "Target count must be at least 1.")
+    .max(100000, "Target count is too large.")
+    .optional(),
+);
+
 export const campaignFormSchema = z.object({
   name: requiredName("Campaign name", 140),
   description: optionalText(1000),
   marketCode: optionalSelect(),
   region: optionalSelect(),
+  city: optionalText(120),
+  category: optionalText(120),
+  targetCount: optionalTargetCount,
   targetKeywords: optionalText(300),
 });
 export type CampaignFormValues = z.infer<typeof campaignFormSchema>;

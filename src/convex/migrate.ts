@@ -57,6 +57,7 @@ export const migratePhase1Leads = mutation({
         email: lead.email,
         website: lead.website,
         websiteState: "UNKNOWN",
+        websiteStatus: "UNKNOWN",
         source: "PHASE1_MIGRATION",
         stage: LEAD_STATUS_TO_STAGE[lead.status],
         score: undefined,

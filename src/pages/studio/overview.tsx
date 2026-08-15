@@ -7,6 +7,7 @@ import {
   Globe,
   Megaphone,
   Plus,
+  Radar,
 } from "lucide-react";
 import { Link, useNavigate, useOutletContext } from "react-router";
 import { ActivityFeed } from "@/components/studio/activity-feed";
@@ -25,6 +26,10 @@ import {
   PIPELINE_STAGES,
   PIPELINE_STAGE_LABELS,
 } from "@/shared/domain";
+import {
+  DISCOVERY_RUN_STATUS_LABELS,
+  DISCOVERY_RUN_STATUS_TONES,
+} from "@/shared/discovery";
 
 function OverviewContent() {
   const { openCreate } = useOutletContext<StudioOutletContext>();
@@ -236,6 +241,8 @@ function OverviewContent() {
             )}
           </section>
 
+          <DiscoveryPanel />
+
           <section
             aria-label="Quick actions"
             className="rounded-md border border-border bg-card"
@@ -340,6 +347,87 @@ function PipelineSummaryBars({
         );
       })}
     </ul>
+  );
+}
+
+function DiscoveryPanel() {
+  const stats = useQuery(api.discovery.stats);
+  return (
+    <section
+      aria-label="Discovery"
+      className="rounded-md border border-border bg-card"
+    >
+      <div className="flex items-center justify-between border-b border-border px-5 py-4">
+        <h2 className="font-display text-lg tracking-tight text-foreground">
+          Discovery
+        </h2>
+        <Link
+          to="/dashboard/discovery"
+          className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          Open discovery
+          <ArrowRight className="size-3" />
+        </Link>
+      </div>
+      {stats === undefined ? (
+        <p className="px-5 py-6 text-sm text-muted-foreground">
+          Loading discovery state…
+        </p>
+      ) : (
+        <dl className="space-y-3 px-5 py-4 text-sm">
+          <div className="flex items-center justify-between gap-3">
+            <dt className="text-muted-foreground">Active runs</dt>
+            <dd className="font-medium tabular-nums text-foreground">
+              {stats.activeRuns}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <dt className="text-muted-foreground">Discovered today</dt>
+            <dd className="font-medium tabular-nums text-foreground">
+              {stats.discoveredToday}
+            </dd>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <dt className="text-muted-foreground">Total discovered</dt>
+            <dd className="font-medium tabular-nums text-foreground">
+              {stats.totalDiscovered}
+            </dd>
+          </div>
+          {stats.failedRuns7d > 0 && (
+            <div className="flex items-center justify-between gap-3">
+              <dt className="text-muted-foreground">Failed runs (7d)</dt>
+              <dd className="font-medium tabular-nums text-red-700 dark:text-red-300">
+                {stats.failedRuns7d}
+              </dd>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-3 border-t border-border pt-3">
+            <dt className="flex items-center gap-1.5 text-muted-foreground">
+              <Radar className="size-3.5" />
+              Latest run
+            </dt>
+            <dd className="flex flex-col items-end gap-0.5 text-right">
+              {stats.latestRun ? (
+                <Link
+                  to={`/dashboard/discovery?run=${stats.latestRun.runId}`}
+                  className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+                >
+                  {stats.latestRun.campaignName ?? "Run"}
+                </Link>
+              ) : (
+                <span className="text-muted-foreground">None yet</span>
+              )}
+              {stats.latestRun && (
+                <StatusBadge
+                  label={DISCOVERY_RUN_STATUS_LABELS[stats.latestRun.status]}
+                  tone={DISCOVERY_RUN_STATUS_TONES[stats.latestRun.status]}
+                />
+              )}
+            </dd>
+          </div>
+        </dl>
+      )}
+    </section>
   );
 }
 

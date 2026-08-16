@@ -8,12 +8,12 @@
  *                                     → result row + run counters + activity
  *
  * Providers plug in through the DISCOVERY_PROVIDERS registry
- * (src/shared/discovery.ts). In this deployment exactly one provider is
- * configured: `csv-import`, which ingests records the operator already has
- * (directory exports, research notes). Every other provider is reported
- * honestly as NOT_CONFIGURED, with the exact requirements documented — a
- * run started against one fails immediately with a real, auditable
- * PROVIDER_NOT_CONFIGURED error instead of pretending to work.
+ * (src/shared/discovery.ts). `csv-import` ingests records the operator
+ * already has (directory exports, research notes); `scrapegraphai` is a
+ * live API provider executed by the node-runtime actions in
+ * src/convex/scrapegraphai.ts, which validate SGAI_API_KEY from the server
+ * environment and feed real results back through this same pipeline via
+ * the internal ingestRecords mutation.
  *
  * All counters (discovered/accepted/duplicate/rejected/failed) are derived
  * from actual record processing. Nothing is ever fabricated.
@@ -21,6 +21,7 @@
 import { v } from "convex/values";
 import { CAMPAIGN_STATUS_LABELS, HIGH_PRIORITY_SCORE } from "../shared/domain";
 import {
+  DISCOVERY_ERROR_LABELS,
   DISCOVERY_PROVIDERS,
   DISCOVERY_RUN_STATUS_LABELS,
   TERMINAL_RUN_STATUSES,
@@ -36,13 +37,14 @@ import {
 import type { BusinessIdentity } from "../shared/discovery/dedupe";
 import { findDuplicate, toBusinessIdentity } from "../shared/discovery/dedupe";
 import { enrichmentUpdates, type EnrichmentUpdates } from "../shared/discovery/enrich";
-import { canonicalizeUrl, normalizeRecord } from "../shared/discovery/normalize";
+import { normalizeRecord } from "../shared/discovery/normalize";
 import {
   scoreNormalizedRecord,
   scoreOpportunity,
 } from "../shared/discovery/score";
 import { validateRawRecord } from "../shared/discovery/validate";
 import { internal } from "./_generated/api";
+import { performWebsiteCheck } from "./lib/website";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
   action,
@@ -110,14 +112,14 @@ function opportunityFromBusiness(
 
 /* --------------------------------- Queries -------------------------------- */
 
-/** The provider registry with honest configuration status. */
-export const providers = query({
-  args: {},
-  handler: async (ctx) => {
-    await requireUser(ctx);
-    return DISCOVERY_PROVIDERS;
-  },
-});
+/**
+ * Provider configuration status is reported by the
+ * `scrapegraphai.providerStatus` ACTION (src/convex/scrapegraphai.ts):
+ * only server-side code can read SGAI_API_KEY, and it lives in a "use
+ * node" file. Queries cannot read the environment, so there is no
+ * discovery.providers query — the registry is always presented with the
+ * live configured flag.
+ */
 
 /** Discovery runs, newest first, optionally scoped to a campaign/status. */
 export const runsList = query({
@@ -651,9 +653,12 @@ async function syncCampaignStatus(
 
 /**
  * Start a discovery run for a campaign. Validation is real: the campaign
- * must carry the full discovery configuration and the provider must be
- * configured. An unconfigured provider produces an auditable FAILED run,
- * never a fake success.
+ * must carry the full discovery configuration. Import providers must be
+ * statically configured; API providers start QUEUED and validate their
+ * live configuration (the env var) at execution time in the actions
+ * (src/convex/scrapegraphai.ts), because only those can read the server
+ * environment. An unconfigured import provider still produces an
+ * auditable FAILED run, never a fake success.
  */
 export const start = mutation({
   args: {
@@ -687,7 +692,10 @@ export const start = mutation({
     }
 
     const now = Date.now();
-    const configured = provider.configured;
+    // Import providers are configured statically. API providers start
+    // QUEUED; execution (which can read the env) fails them honestly if
+    // their key is missing — see src/convex/scrapegraphai.ts.
+    const configured = provider.kind === "IMPORT" ? provider.configured : true;
     const runId = await ctx.db.insert("discoveryRuns", {
       campaignId: campaign._id,
       status: configured ? "QUEUED" : "FAILED",
@@ -751,9 +759,23 @@ export const start = mutation({
   },
 });
 
+/** Shape returned by the record-ingestion path (public + internal). */
+type IngestRecordsResult = {
+  runId: string;
+  alreadyProcessed: boolean;
+  status: string;
+  processed: number;
+  accepted: number;
+  duplicates: number;
+  rejected: number;
+  failed: number;
+};
+
 /**
  * Submit a batch of raw records to a csv-import run. The batch is processed
  * atomically; a client-supplied batchId makes re-submissions idempotent.
+ * Operators may only import into csv-import runs; API providers receive
+ * their records through the internal ingest path (see ingestRecords).
  */
 export const submitRecords = mutation({
   args: {
@@ -761,8 +783,49 @@ export const submitRecords = mutation({
     batchId: v.string(),
     records: v.array(discoveryRawRecordValidator),
   },
-  handler: async (ctx, { runId, batchId, records }) => {
+  handler: async (
+    ctx,
+    { runId, batchId, records },
+  ): Promise<IngestRecordsResult> => {
     const user = await requireUser(ctx);
+    const run = await ctx.db.get(runId);
+    if (!run) {
+      throw apiError("NOT_FOUND", "This discovery run no longer exists.");
+    }
+    if (run.providerSlug !== "csv-import") {
+      throw apiError(
+        "VALIDATION",
+        "This provider does not accept record imports.",
+      );
+    }
+    return ctx.runMutation(internal.discovery.ingestRecords, {
+      runId,
+      batchId,
+      records,
+      actorId: user._id,
+    });
+  },
+});
+
+/**
+ * Internal ingestion path shared by the operator import and the API
+ * providers: process a batch of raw records through the deterministic
+ * pipeline, update the run counters from real outcomes, and finalize the
+ * run honestly. No auth check here — callers enforce it (the public
+ * submitRecords and the execution actions). `batchId` keeps re-submission
+ * idempotent.
+ */
+export const ingestRecords = internalMutation({
+  args: {
+    runId: v.id("discoveryRuns"),
+    batchId: v.string(),
+    records: v.array(discoveryRawRecordValidator),
+    actorId: v.optional(v.id("users")),
+  },
+  handler: async (
+    ctx,
+    { runId, batchId, records, actorId },
+  ): Promise<IngestRecordsResult> => {
     const run = await ctx.db.get(runId);
     if (!run) {
       throw apiError("NOT_FOUND", "This discovery run no longer exists.");
@@ -783,12 +846,6 @@ export const submitRecords = mutation({
       throw apiError(
         "CONFLICT",
         `This run is already ${DISCOVERY_RUN_STATUS_LABELS[run.status].toLowerCase()}.`,
-      );
-    }
-    if (run.providerSlug !== "csv-import") {
-      throw apiError(
-        "VALIDATION",
-        "This provider does not accept record imports.",
       );
     }
     if (records.length === 0) {
@@ -812,7 +869,11 @@ export const submitRecords = mutation({
       });
     }
 
-    const outcomes = await processRecords(ctx, { ...run, status: nextStatus }, records);
+    const outcomes = await processRecords(
+      ctx,
+      { ...run, status: nextStatus },
+      records,
+    );
 
     const discoveredCount = run.discoveredCount + records.length;
     const processedCount = run.processedCount + records.length;
@@ -854,7 +915,7 @@ export const submitRecords = mutation({
       } duplicate${outcomes.duplicates === 1 ? "" : "s"}, ${
         outcomes.rejected
       } rejected, ${outcomes.failed} failed`,
-      actorId: user._id,
+      actorId,
       entityType: "discoveryRun",
       entityId: runId,
     });
@@ -871,11 +932,11 @@ export const submitRecords = mutation({
             : `Discovery completed — ${acceptedCount} accepted, ${duplicateCount} duplicate${
                 duplicateCount === 1 ? "" : "s"
               }, ${rejectedCount} rejected`,
-        actorId: user._id,
+        actorId,
         entityType: "discoveryRun",
         entityId: runId,
       });
-      await syncCampaignStatus(ctx, run.campaignId, user._id);
+      await syncCampaignStatus(ctx, run.campaignId, actorId);
     }
 
     log("info", "discovery.records_imported", {
@@ -900,10 +961,14 @@ export const submitRecords = mutation({
   },
 });
 
-/** Finish a running run early (target reached, or operator satisfied). */
+/**
+ * Finish a running run early (target reached, or the provider has nothing
+ * more to return). Delegates to the internal finalizeRun so API execution
+ * actions can close runs the same way.
+ */
 export const finish = mutation({
   args: { runId: v.id("discoveryRuns") },
-  handler: async (ctx, { runId }) => {
+  handler: async (ctx, { runId }): Promise<{ status: DiscoveryRunStatus }> => {
     const user = await requireUser(ctx);
     const run = await ctx.db.get(runId);
     if (!run) {
@@ -921,6 +986,96 @@ export const finish = mutation({
         `This run is already ${DISCOVERY_RUN_STATUS_LABELS[run.status].toLowerCase()}.`,
       );
     }
+    return ctx.runMutation(internal.discovery.finalizeRun, {
+      runId,
+      actorId: user._id,
+    });
+  },
+});
+
+/* ------------------- Internal execution helpers (API path) ---------------- */
+
+/**
+ * Internal write: transition a run's status (used by the execution actions
+ * to mark RUNNING before work starts).
+ */
+export const setRunStatus = internalMutation({
+  args: {
+    runId: v.id("discoveryRuns"),
+    status: discoveryRunStatusValidator,
+    startedAt: v.optional(v.number()),
+  },
+  handler: async (ctx, { runId, status, startedAt }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) {
+      throw apiError("NOT_FOUND", "This discovery run no longer exists.");
+    }
+    await ctx.db.patch(runId, {
+      status,
+      ...(startedAt !== undefined ? { startedAt } : {}),
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Internal write: mark a run FAILED with a real, auditable error (used by
+ * the execution actions when the provider request fails).
+ */
+export const failRun = internalMutation({
+  args: {
+    runId: v.id("discoveryRuns"),
+    errorCode: v.string(),
+    errorMessage: v.string(),
+  },
+  handler: async (ctx, { runId, errorCode, errorMessage }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) {
+      throw apiError("NOT_FOUND", "This discovery run no longer exists.");
+    }
+    if (TERMINAL_RUN_STATUSES.includes(run.status)) return;
+    const now = Date.now();
+    await ctx.db.patch(runId, {
+      status: "FAILED",
+      errorCode,
+      errorMessage,
+      completedAt: now,
+      updatedAt: now,
+    });
+    await recordActivity(ctx, {
+      type: "DISCOVERY_FAILED",
+      description: `Discovery failed — ${
+        DISCOVERY_ERROR_LABELS[errorCode as keyof typeof DISCOVERY_ERROR_LABELS] ??
+        errorCode
+      }: ${errorMessage}`,
+      entityType: "discoveryRun",
+      entityId: runId,
+    });
+    await syncCampaignStatus(ctx, run.campaignId);
+    log("error", "discovery.failed", { runId, errorCode, errorMessage });
+  },
+});
+
+/**
+ * Internal write: close a started run as COMPLETED (or PARTIAL when any
+ * record failed), with the same real activity rows as the public finish.
+ */
+export const finalizeRun = internalMutation({
+  args: { runId: v.id("discoveryRuns"), actorId: v.optional(v.id("users")) },
+  handler: async (
+    ctx,
+    { runId, actorId },
+  ): Promise<{ status: DiscoveryRunStatus }> => {
+    const run = await ctx.db.get(runId);
+    if (!run) {
+      throw apiError("NOT_FOUND", "This discovery run no longer exists.");
+    }
+    if (TERMINAL_RUN_STATUSES.includes(run.status)) {
+      return { status: run.status };
+    }
+    if (run.status === "QUEUED") {
+      return { status: run.status };
+    }
     const finalStatus: DiscoveryRunStatus =
       run.failedCount > 0 ? "PARTIAL" : "COMPLETED";
     const now = Date.now();
@@ -930,7 +1085,8 @@ export const finish = mutation({
       updatedAt: now,
     });
     await recordActivity(ctx, {
-      type: finalStatus === "PARTIAL" ? "DISCOVERY_PARTIAL" : "DISCOVERY_COMPLETED",
+      type:
+        finalStatus === "PARTIAL" ? "DISCOVERY_PARTIAL" : "DISCOVERY_COMPLETED",
       description:
         finalStatus === "PARTIAL"
           ? `Discovery partially completed — ${run.failedCount} failed record${
@@ -939,13 +1095,206 @@ export const finish = mutation({
           : `Discovery completed — ${run.acceptedCount} accepted, ${run.duplicateCount} duplicate${
               run.duplicateCount === 1 ? "" : "s"
             }, ${run.rejectedCount} rejected`,
-      actorId: user._id,
+      actorId,
       entityType: "discoveryRun",
       entityId: runId,
     });
-    await syncCampaignStatus(ctx, run.campaignId, user._id);
-    log("info", "discovery.finished", { runId, status: finalStatus });
+    await syncCampaignStatus(ctx, run.campaignId, actorId);
+    log("info", "discovery.finalized", { runId, status: finalStatus });
     return { status: finalStatus };
+  },
+});
+
+/** Internal read: a run with its campaign (used by execution actions). */
+export const getRun = internalQuery({
+  args: { runId: v.id("discoveryRuns") },
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) return null;
+    const campaign = await ctx.db.get(run.campaignId);
+    return { run, campaign };
+  },
+});
+
+/**
+ * Internal write: create the smoke-test campaign and run headlessly so the
+ * smokeTest action can exercise the exact same pipeline without a session.
+ * Only used by the ScrapeGraphAI smoke test.
+ */
+export const createSmokeRun = internalMutation({
+  args: {
+    name: v.string(),
+    description: v.optional(v.string()),
+    marketCode: v.string(),
+    region: v.string(),
+    city: v.string(),
+    category: v.string(),
+    targetCount: v.number(),
+    providerSlug: v.string(),
+    providerName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const campaignId = await ctx.db.insert("campaigns", {
+      name: args.name,
+      description: args.description,
+      status: "READY",
+      marketCode: args.marketCode,
+      region: args.region,
+      city: args.city,
+      category: args.category,
+      targetCount: args.targetCount,
+      updatedAt: now,
+    });
+    const runId = await ctx.db.insert("discoveryRuns", {
+      campaignId,
+      status: "QUEUED",
+      providerSlug: args.providerSlug,
+      providerName: args.providerName,
+      marketCode: args.marketCode,
+      region: args.region,
+      city: args.city,
+      category: args.category,
+      requestedCount: args.targetCount,
+      discoveredCount: 0,
+      acceptedCount: 0,
+      duplicateCount: 0,
+      rejectedCount: 0,
+      failedCount: 0,
+      processedCount: 0,
+      errorCode: undefined,
+      errorMessage: undefined,
+      cancelledReason: undefined,
+      startedAt: undefined,
+      completedAt: undefined,
+      cancelledAt: undefined,
+      processedBatches: [],
+      notes: `Smoke test — ${args.city} · ${args.category}`,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await recordActivity(ctx, {
+      type: "DISCOVERY_STARTED",
+      description: `Discovery started — ${args.name} · ${args.providerName} (target ${args.targetCount})`,
+      entityType: "discoveryRun",
+      entityId: runId,
+    });
+    return { campaignId, runId };
+  },
+});
+
+/**
+ * Internal write: delete a smoke-test run and everything it created — its
+ * result rows, the businesses it accepted, its campaign, and the activity
+ * rows referencing those entities. Used to keep smoke tests small and
+ * removable; never exposed to clients.
+ */
+export const cleanupSmokeRun = internalMutation({
+  args: { runId: v.id("discoveryRuns") },
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) {
+      return {
+        deleted: { run: 0, results: 0, businesses: 0, campaign: 0, activity: 0 },
+      };
+    }
+    const campaignId = run.campaignId;
+    const results = await ctx.db
+      .query("discoveryResults")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const businessIds = [
+      ...new Set(
+        results
+          .map((row) => row.businessId)
+          .filter((id): id is Id<"businesses"> => id !== undefined),
+      ),
+    ];
+    const related = new Set<string>([runId, campaignId, ...businessIds]);
+    const activity = (await ctx.db.query("activity").collect()).filter(
+      (row) => row.entityId !== undefined && related.has(row.entityId),
+    );
+    // Idempotent deletion: a retried action can leave two runs sharing a
+    // campaign, and cleanup may be re-run — guard every delete.
+    for (const row of results) {
+      if (await ctx.db.get(row._id)) await ctx.db.delete(row._id);
+    }
+    for (const id of businessIds) {
+      if (await ctx.db.get(id)) await ctx.db.delete(id);
+    }
+    if (await ctx.db.get(runId)) await ctx.db.delete(runId);
+    if (campaignId && (await ctx.db.get(campaignId))) {
+      await ctx.db.delete(campaignId);
+    }
+    for (const row of activity) {
+      if (await ctx.db.get(row._id)) await ctx.db.delete(row._id);
+    }
+    log("info", "discovery.smoke_cleaned", {
+      runId,
+      results: results.length,
+      businesses: businessIds.length,
+      activity: activity.length,
+    });
+    return {
+      deleted: {
+        run: 1,
+        results: results.length,
+        businesses: businessIds.length,
+        campaign: campaignId ? 1 : 0,
+        activity: activity.length,
+      },
+    };
+  },
+});
+
+/**
+ * Internal read: full smoke-test snapshot (run, campaign, results with
+ * business joins, and the activity rows written for these entities).
+ */
+export const getSmokeSnapshot = internalQuery({
+  args: { runId: v.id("discoveryRuns") },
+  handler: async (ctx, { runId }) => {
+    const run = await ctx.db.get(runId);
+    if (!run) return null;
+    const campaign = await ctx.db.get(run.campaignId);
+    const results = await ctx.db
+      .query("discoveryResults")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const businessIds = [
+      ...new Set(
+        results
+          .map((row) => row.businessId)
+          .filter((id): id is Id<"businesses"> => id !== undefined),
+      ),
+    ];
+    const businesses = (
+      await Promise.all(businessIds.map((id) => ctx.db.get(id)))
+    ).filter((business): business is Doc<"businesses"> => business !== null);
+    const byId = new Map(businesses.map((business) => [business._id, business]));
+    const relatedIds = new Set<string>([runId, run.campaignId]);
+    for (const id of businessIds) relatedIds.add(id);
+    const activity = (await ctx.db.query("activity").collect())
+      .filter(
+        (row) =>
+          row.entityId !== undefined && relatedIds.has(row.entityId),
+      )
+      .sort((a, b) => b._creationTime - a._creationTime)
+      .map((row) => ({
+        type: row.type,
+        description: row.description,
+        entityType: row.entityType,
+        entityId: row.entityId,
+      }));
+    return {
+      run,
+      campaign,
+      results: results.map((row) => ({
+        ...row,
+        business: row.businessId ? byId.get(row.businessId) : undefined,
+      })),
+      activity,
+    };
   },
 });
 
@@ -1117,52 +1466,8 @@ export const retryFailedRecords = mutation({
 
 /* ---------------------------- Website reachability ------------------------ */
 
-/**
- * Perform a real reachability check on a single website: fetch the URL
- * with a bounded timeout and return the honest outcome. The result is a
- * status, not a quality claim.
- */
-async function performWebsiteCheck(
-  website: string | undefined,
-): Promise<{
-  websiteStatus: WebsiteReachabilityState;
-  websiteHttpStatus: number | undefined;
-}> {
-  if (!website) {
-    return { websiteStatus: "NO_WEBSITE", websiteHttpStatus: undefined };
-  }
-  const canonical = canonicalizeUrl(website);
-  if (!canonical) {
-    return { websiteStatus: "INVALID_URL", websiteHttpStatus: undefined };
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10_000);
-  try {
-    const response = await fetch(canonical.url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: { "user-agent": "AgencyStudio-HealthCheck/0.4" },
-    });
-    await response.body?.cancel().catch(() => {});
-    if (response.ok) {
-      return { websiteStatus: "HAS_WEBSITE", websiteHttpStatus: response.status };
-    }
-    if (response.status === 403 || response.status === 429) {
-      return { websiteStatus: "BLOCKED", websiteHttpStatus: response.status };
-    }
-    return { websiteStatus: "UNREACHABLE", websiteHttpStatus: response.status };
-  } catch (error) {
-    if (controller.signal.aborted) {
-      return { websiteStatus: "UNREACHABLE", websiteHttpStatus: undefined }; // timed out
-    }
-    if (error instanceof TypeError) {
-      return { websiteStatus: "UNREACHABLE", websiteHttpStatus: undefined }; // DNS/network
-    }
-    return { websiteStatus: "CHECK_FAILED", websiteHttpStatus: undefined };
-  } finally {
-    clearTimeout(timer);
-  }
-}
+/* performWebsiteCheck lives in ./lib/website.ts so the node-runtime */
+/* ScrapeGraphAI actions can reuse it (see src/convex/scrapegraphai.ts). */
 
 /** Internal read used by the website check action. */
 export const getBusiness = internalQuery({

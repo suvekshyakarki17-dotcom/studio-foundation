@@ -130,9 +130,18 @@ Discovery is real execution with honest accounting, not placeholder data:
   raw snapshot, so they can be re-processed through the same pipeline;
   outcomes update the row in place with a `retriedAt` stamp and the run
   counters are recomputed from real outcomes.
-- **Providers**: a working `csv-import` provider; every other provider slot
-  stays `NOT_CONFIGURED` until something real is connected — no fake
-  integrations.
+- **Providers**: a working `csv-import` provider plus a real
+  **ScrapeGraphAI** integration (`scrapegraphai` in `DISCOVERY_PROVIDERS`,
+  wired in `src/convex/scrapegraphai.ts`). ScrapeGraphAI runs in the
+  Convex Node.js runtime (`"use node"`) because it reads `SGAI_API_KEY`
+  from the server environment and performs real HTTP calls to the V2
+  `/search` endpoint (`https://v2-api.scrapegraphai.com/api/search`). The
+  response maps through the same normalize → validate → deduplicate →
+  persist pipeline as CSV import (`ingestRecords`); a run executes via
+  `scrapegraphai.executeRun`, and `scrapegraphai.providerStatus` reports
+  the provider's real configured state (key present on the server) so the
+  UI never fabricates a connection. Every other provider slot stays
+  `NOT_CONFIGURED` until something real is connected.
 - **Website checks** (`discovery.checkWebsite` action, `checkWebsitesBatch`
   action): fetch a business's URL with a bounded timeout and record the
   honest reachability outcome (`HAS_WEBSITE | NO_WEBSITE | UNREACHABLE |
@@ -237,10 +246,13 @@ count). The topbar chip reflects `system.dbPing` live. Nothing claims
 
 The architecture leaves room for these without implementing them:
 
-- External discovery providers (later phases) — only `csv-import` is real
-  today; AI/scraping providers are reserved slots that stay
-  `NOT_CONFIGURED` until real integrations exist. Businesses carry
-  `source` + `confidence` provenance for when they do.
+- External discovery providers — `csv-import` and `scrapegraphai` are
+  real today; remaining AI/scraping provider slots stay `NOT_CONFIGURED`
+  until real integrations exist. Businesses carry `source` + `confidence`
+  provenance for when they do. ScrapeGraphAI's `search` extraction
+  returns business names with limited contact data (no email/phone in the
+  current extraction schema), so opportunity scores from API runs
+  currently reflect website + completeness signals only.
 - Strong website-quality claims (later phase) — Phase 3 verifies
   *reachability*, never design quality; opportunity scores are a
   qualification heuristic with transparent factors, not a verdict.

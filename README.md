@@ -82,9 +82,14 @@ them (see `docs/architecture.md`).
 - **CSV import**: client-side parsing, batched, idempotent submission
   (batch IDs), atomic per batch, with real accepted/duplicate/rejected/
   failed counts
-- **Providers**: a `csv-import` provider that actually works today; other
-  provider slots stay honestly `NOT_CONFIGURED` until real integrations
-  exist
+- **Providers**: a `csv-import` provider that actually works today, plus a
+  real **ScrapeGraphAI** discovery integration — the Studio calls the
+  ScrapeGraphAI V2 search API server-side (`SGAI_API_KEY` Convex secret,
+  Node-runtime action), maps the real extraction through the same
+  normalize → validate → deduplicate → persist pipeline as CSV, and runs
+  the real website checks and opportunity scoring on what comes back.
+  Remaining provider slots stay honestly `NOT_CONFIGURED` until real
+  integrations exist
 - **Website reachability checks**: real actions (`checkWebsite` for one,
   `checkWebsitesBatch` for a run's unverified sites, sequentially paced)
   fetch each site with a bounded timeout and record the honest outcome

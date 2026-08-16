@@ -264,18 +264,18 @@ export const DISCOVERY_PROVIDERS: readonly DiscoveryProviderDefinition[] = [
   },
   {
     slug: "scrapegraphai",
-    name: "ScrapeGraphAI (Lab candidate)",
+    name: "ScrapeGraphAI",
     kind: "API",
+    /** Static baseline only — the live flag is overlaid server-side from */
+    /** SGAI_API_KEY presence by the providerStatus action (src/convex/ */
+    /** scrapegraphai.ts) so this module stays environment-free. */
     configured: false,
     description:
-      "Repository Lab candidate for structured extraction from public pages. Explicitly NOT integrated in Phase 3: it needs a self-hosted Python service or ScrapeGraphAI API account, and its use would require source-by-source terms-of-service review. The provider boundary is reserved.",
-    capabilities: ["Structured extraction", "Web research"],
-    requirements: [
-      "Self-hosted ScrapeGraphAI service or ScrapeGraphAI API key",
-      "Per-source terms-of-service review before any scraping",
-    ],
-    envVars: ["SCRAPEGRAPHAI_API_KEY"],
-    docs: "Integration point: same adapter seam as google-places. It must respect robots/terms per source and route results through the shared pipeline. Not wired in Phase 3 by design.",
+      "Live local-business discovery from the ScrapeGraphAI V2 search API: a real web search scoped to the campaign's market/location/category plus AI extraction of business records. Results run the exact same normalize → validate → deduplicate → persist pipeline as every other provider, with provenance.",
+    capabilities: ["Web search", "Structured extraction", "Real results"],
+    requirements: ["SGAI_API_KEY set as a project secret"],
+    envVars: ["SGAI_API_KEY"],
+    docs: "Backed by src/convex/scrapegraphai.ts (actions) + src/shared/discovery/scrapegraphai.ts (pure adapter). The key is read server-side via process.env.SGAI_API_KEY — never from client code.",
   },
 ];
 

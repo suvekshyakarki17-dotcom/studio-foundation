@@ -14,7 +14,7 @@ import {
   Square,
   XCircle,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/studio/page-header";
@@ -114,7 +114,25 @@ function DiscoveryContent() {
   const runParam = searchParams.get("run");
   const campaignParam = searchParams.get("campaign");
 
-  const providers = useQuery(api.discovery.providers);
+  // Provider configuration status comes from an action: only the server
+  // can read SGAI_API_KEY (see src/convex/scrapegraphai.ts).
+  const [providers, setProviders] = useState<
+    readonly DiscoveryProviderDefinition[] | undefined
+  >(undefined);
+  const loadProviders = useAction(api.scrapegraphai.providerStatus);
+  useEffect(() => {
+    let cancelled = false;
+    void loadProviders()
+      .then((result) => {
+        if (!cancelled) setProviders(result);
+      })
+      .catch(() => {
+        if (!cancelled) setProviders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadProviders]);
   const campaigns = useQuery(api.campaigns.list, {});
   const runs = useQuery(api.discovery.runsList, { limit: 100 });
 
@@ -303,6 +321,7 @@ function NewRunPanel({
   onStarted: (runId: string) => void;
 }) {
   const startDiscovery = useMutation(api.discovery.start);
+  const executeRun = useAction(api.scrapegraphai.executeRun);
   const [campaignId, setCampaignId] = useState(preselectCampaignId ?? "");
   const [providerSlug, setProviderSlug] = useState("csv-import");
   const [targetCount, setTargetCount] = useState(() => {
@@ -360,6 +379,19 @@ function NewRunPanel({
       });
       toast(`Discovery run created for ${campaign.name}`);
       onStarted(runId);
+      // API providers execute for real after the run is created; failures
+      // are recorded on the run (FAILED with an auditable error) and shown
+      // here.
+      if (provider.kind === "API") {
+        try {
+          const result = await executeRun({ runId });
+          toast(
+            `ScrapeGraphAI run finished — ${result.accepted} accepted, ${result.duplicates} duplicate${result.duplicates === 1 ? "" : "s"}, ${result.rejected} rejected, ${result.failed} failed`, // prettier-ignore
+          );
+        } catch (error) {
+          toast.error(`ScrapeGraphAI execution failed: ${getErrorMessage(error)}`);
+        }
+      }
     } catch (error) {
       toast.error(getErrorMessage(error));
     } finally {
@@ -625,9 +657,11 @@ function RunDetail({
   const cancelRun = useMutation(api.discovery.cancel);
   const retryFailed = useMutation(api.discovery.retryFailedRecords);
   const checkWebsitesBatch = useAction(api.discovery.checkWebsitesBatch);
+  const executeRun = useAction(api.scrapegraphai.executeRun);
   const [busy, setBusy] = useState(false);
   const [retrying, setRetrying] = useState(false);
   const [checkingBatch, setCheckingBatch] = useState(false);
+  const [runningApi, setRunningApi] = useState(false);
 
   const handleFinish = async () => {
     setBusy(true);
@@ -691,6 +725,20 @@ function RunDetail({
     }
   };
 
+  const handleExecuteApi = async () => {
+    setRunningApi(true);
+    try {
+      const result = await executeRun({ runId: run._id });
+      toast(
+        `ScrapeGraphAI run finished — ${result.accepted} accepted, ${result.duplicates} duplicate${result.duplicates === 1 ? "" : "s"}, ${result.rejected} rejected, ${result.failed} failed`, // prettier-ignore
+      );
+    } catch (error) {
+      toast.error(`ScrapeGraphAI execution failed: ${getErrorMessage(error)}`);
+    } finally {
+      setRunningApi(false);
+    }
+  };
+
   const market = run.marketCode
     ? KNOWN_MARKETS.find((item) => item.code === run.marketCode)
     : undefined;
@@ -701,6 +749,7 @@ function RunDetail({
   const canImport = active && run.providerSlug === "csv-import";
   const canRetry = run.failedCount > 0;
   const canCheckBatch = run.pendingWebsiteChecks > 0;
+  const canExecuteApi = run.status === "QUEUED" && run.providerSlug === "scrapegraphai";
 
   const [cityFilter, setCityFilter] = useState<string | typeof ALL>(ALL);
   const [categoryFilter, setCategoryFilter] = useState<string | typeof ALL>(ALL);
@@ -750,6 +799,23 @@ function RunDetail({
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {canExecuteApi && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleExecuteApi()}
+                disabled={runningApi}
+                title="Execute this run now — real ScrapeGraphAI API request"
+              >
+                {runningApi ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Radar className="size-3.5" />
+                )}
+                Run now
+              </Button>
+            )}
             {canCheckBatch && (
               <Button
                 type="button"

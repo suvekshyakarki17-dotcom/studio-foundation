@@ -27,6 +27,13 @@ must NOT contain them):
 | `JWT_PRIVATE_KEY` / `JWKS` | Auth token signing (Convex Auth)             |
 | `VLY_APP_NAME`         | App name used in OTP emails                      |
 | `VLY_INTEGRATION_KEY`  | Platform integration key (server only)           |
+| `SGAI_API_KEY`         | ScrapeGraphAI API key (Phase 3 discovery)        |
+
+`SGAI_API_KEY` is read only inside the Node-runtime action
+(`src/convex/scrapegraphai.ts`) via `process.env.SGAI_API_KEY` — it never
+reaches the client bundle or the logs. The discovery page shows the
+provider as configured/unconfigured based on its real presence on the
+server (`scrapegraphai.providerStatus`), never on a client-side claim.
 
 Future provider credentials (AI, email, payments, deployment, ...) will be
 added here when the corresponding phase wires a real integration. Phase 1

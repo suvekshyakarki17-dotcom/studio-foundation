@@ -19,7 +19,7 @@
  * from actual record processing. Nothing is ever fabricated.
  */
 import { v } from "convex/values";
-import { CAMPAIGN_STATUS_LABELS } from "../shared/domain";
+import { CAMPAIGN_STATUS_LABELS, HIGH_PRIORITY_SCORE } from "../shared/domain";
 import {
   DISCOVERY_PROVIDERS,
   DISCOVERY_RUN_STATUS_LABELS,
@@ -27,13 +27,20 @@ import {
   WEBSITE_REACHABILITY_LABELS,
   canRunTransition,
   discoveryReadiness,
+  type DiscoveryNormalizedRecord,
   type DiscoveryRunStatus,
   type DiscoveryRawRecord,
+  type DuplicateSignal,
   type WebsiteReachabilityState,
 } from "../shared/discovery";
-import { enrichmentUpdates } from "../shared/discovery/enrich";
+import type { BusinessIdentity } from "../shared/discovery/dedupe";
 import { findDuplicate, toBusinessIdentity } from "../shared/discovery/dedupe";
+import { enrichmentUpdates, type EnrichmentUpdates } from "../shared/discovery/enrich";
 import { canonicalizeUrl, normalizeRecord } from "../shared/discovery/normalize";
+import {
+  scoreNormalizedRecord,
+  scoreOpportunity,
+} from "../shared/discovery/score";
 import { validateRawRecord } from "../shared/discovery/validate";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -57,6 +64,9 @@ import {
 
 const MAX_BATCH_RECORDS = 200;
 const RESULTS_LIMIT = 500;
+const MAX_WEBSITE_CHECK_BATCH = 50;
+/** Polite pacing between website checks so a batch never hammers a host. */
+const WEBSITE_CHECK_PACING_MS = 250;
 
 /** Provider confidence in operator-provided records. */
 const CSV_IMPORT_CONFIDENCE = 1;
@@ -64,6 +74,38 @@ const CSV_IMPORT_CONFIDENCE = 1;
 function normalizeText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed ? trimmed : undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Build the stored opportunity assessment from a normalized record. */
+function opportunityFromRecord(
+  normalized: DiscoveryNormalizedRecord,
+  scoredAt: number,
+) {
+  const assessment = scoreNormalizedRecord(normalized);
+  return { score: assessment.score, factors: assessment.factors, scoredAt };
+}
+
+/**
+ * Compute the stored opportunity assessment from an existing business's
+ * real fields. Used when a signal changes (e.g. a website check completes).
+ */
+function opportunityFromBusiness(
+  business: Doc<"businesses">,
+  scoredAt: number,
+) {
+  const assessment = scoreOpportunity({
+    websiteStatus: business.websiteStatus,
+    hasEmail: Boolean(business.email),
+    hasPhone: Boolean(business.phone),
+    hasContactName: Boolean(business.contactName),
+    hasCity: Boolean(business.city),
+    hasCategory: Boolean(business.category),
+  });
+  return { score: assessment.score, factors: assessment.factors, scoredAt };
 }
 
 /* --------------------------------- Queries -------------------------------- */
@@ -112,7 +154,7 @@ export const runsList = query({
   },
 });
 
-/** Single run with its campaign summary. */
+/** Single run with its campaign summary and website-check backlog. */
 export const runsGet = query({
   args: { runId: v.id("discoveryRuns") },
   handler: async (ctx, { runId }) => {
@@ -120,8 +162,32 @@ export const runsGet = query({
     const run = await ctx.db.get(runId);
     if (!run) throw apiError("NOT_FOUND", "This discovery run no longer exists.");
     const campaign = await ctx.db.get(run.campaignId);
+
+    // How many accepted businesses from this run still have an unverified
+    // website (status UNKNOWN) — the honest "needs a check" backlog.
+    const results = await ctx.db
+      .query("discoveryResults")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const businessIds = [
+      ...new Set(
+        results
+          .filter(
+            (row) => row.status === "ACCEPTED" && row.businessId !== undefined,
+          )
+          .map((row) => row.businessId as Id<"businesses">),
+      ),
+    ];
+    const businesses = (
+      await Promise.all(businessIds.map((id) => ctx.db.get(id)))
+    ).filter((business): business is Doc<"businesses"> => business !== null);
+    const pendingWebsiteChecks = businesses.filter(
+      (business) => business.websiteStatus === "UNKNOWN",
+    ).length;
+
     return {
       ...run,
+      pendingWebsiteChecks,
       campaign: campaign
         ? {
             id: campaign._id,
@@ -207,6 +273,7 @@ export const resultsList = query({
             name: byId.get(row.businessId)?.company,
             stage: byId.get(row.businessId)?.stage,
             websiteStatus: byId.get(row.businessId)?.websiteStatus,
+            opportunity: byId.get(row.businessId)?.opportunity,
           }
         : undefined,
       duplicateOfBusiness: row.duplicateOf
@@ -250,6 +317,19 @@ export const stats = query({
       (business) => (business.discoveredAt ?? 0) >= startOfToday,
     ).length;
 
+    // Automatic opportunity scoring coverage (Phase 3 lead intelligence).
+    const scoredBusinesses = businesses.filter(
+      (business) => business.opportunity !== undefined,
+    );
+    const opportunityScored = scoredBusinesses.length;
+    const highOpportunity = scoredBusinesses.filter(
+      (business) => business.opportunity!.score >= HIGH_PRIORITY_SCORE,
+    ).length;
+    const opportunitySum = scoredBusinesses.reduce(
+      (sum, business) => sum + business.opportunity!.score,
+      0,
+    );
+
     const latest = await ctx.db
       .query("discoveryRuns")
       .order("desc")
@@ -276,12 +356,153 @@ export const stats = query({
       failedRuns7d,
       totalDiscovered: discovered.length,
       discoveredToday,
+      opportunityScored,
+      highOpportunity,
+      averageOpportunity:
+        opportunityScored > 0 ? Math.round(opportunitySum / opportunityScored) : null,
       latestRun,
     };
   },
 });
 
 /* -------------------------------- Pipeline -------------------------------- */
+
+/** Per-record outcome of the deterministic pipeline, with what to persist. */
+type RecordOutcome =
+  | {
+      status: "ACCEPTED";
+      businessId: Id<"businesses">;
+      normalized: DiscoveryNormalizedRecord;
+    }
+  | {
+      status: "DUPLICATE";
+      duplicateOf: Id<"businesses">;
+      duplicateSignal: DuplicateSignal;
+      normalized: DiscoveryNormalizedRecord;
+    }
+  | {
+      status: "REJECTED";
+      rejectionReason: string;
+      normalized: DiscoveryNormalizedRecord;
+    }
+  | { status: "FAILED"; rejectionReason: string };
+
+/**
+ * Process one raw record through the pipeline: normalize → validate →
+ * deduplicate → (persist | link), returning the outcome. Pure state changes
+ * happen here; the caller decides how to record the outcome (insert a fresh
+ * result row for a batch, patch an existing FAILED row for a retry).
+ *
+ * `candidates` is mutated in place when a record is accepted so later
+ * records in the same batch/retry see it.
+ */
+async function processRecord(
+  ctx: MutationCtx,
+  run: Doc<"discoveryRuns">,
+  raw: DiscoveryRawRecord,
+  candidates: BusinessIdentity[],
+  now: number,
+): Promise<RecordOutcome> {
+  try {
+    const normalized = normalizeRecord(raw, CSV_IMPORT_CONFIDENCE);
+    const validation = validateRawRecord(raw);
+
+    if (!validation.valid) {
+      return {
+        status: "REJECTED",
+        rejectionReason: validation.reasons.join(" "),
+        normalized,
+      };
+    }
+
+    const match = findDuplicate(normalized, candidates);
+    if (match.matched && match.businessId && match.signal) {
+      const existingBusiness = await ctx.db.get(
+        match.businessId as Id<"businesses">,
+      );
+      if (existingBusiness) {
+        // Controlled enrichment: fill only empty fields on high-confidence
+        // signals; never overwrite; never destroy data.
+        const updates: EnrichmentUpdates = enrichmentUpdates(
+          {
+            website: existingBusiness.website,
+            phone: existingBusiness.phone,
+            email: existingBusiness.email,
+            city: existingBusiness.city,
+            category: existingBusiness.category,
+          },
+          normalized,
+          match.signal,
+        );
+        if (Object.keys(updates).length > 0) {
+          await ctx.db.patch(existingBusiness._id, {
+            ...updates,
+            updatedAt: now,
+          });
+        }
+        return {
+          status: "DUPLICATE",
+          duplicateOf: existingBusiness._id,
+          duplicateSignal: match.signal,
+          normalized,
+        };
+      }
+    }
+
+    const businessId = await ctx.db.insert("businesses", {
+      company: normalized.company,
+      contactName: normalized.contactName,
+      email: normalized.email,
+      phone: normalized.phone,
+      website: normalized.website,
+      websiteState: "UNKNOWN",
+      websiteStatus: normalized.websiteStatus,
+      websiteCheckedAt: undefined,
+      websiteHttpStatus: undefined,
+      city: normalized.city ?? run.city,
+      category: normalized.category ?? run.category,
+      address: normalized.address,
+      socials: normalized.socials,
+      whatsapp: normalized.whatsapp,
+      source: "DISCOVERY",
+      marketCode: run.marketCode,
+      region: normalized.region ?? run.region,
+      stage: "DISCOVERED",
+      score: undefined,
+      campaignId: run.campaignId,
+      convertedClientId: undefined,
+      confidence: normalized.confidence,
+      opportunity: opportunityFromRecord(normalized, now),
+      discoveredBy: run.providerSlug,
+      discoveryRunId: run._id,
+      discoveredAt: now,
+      sourceReference: normalized.sourceReference,
+      notes: normalized.notes,
+      updatedAt: now,
+    });
+    candidates.push(
+      toBusinessIdentity({
+        id: businessId,
+        company: normalized.company,
+        city: normalized.city,
+        website: normalized.website,
+        phone: normalized.phone,
+        email: normalized.email,
+      }),
+    );
+    return { status: "ACCEPTED", businessId, normalized };
+  } catch (error) {
+    // A record that could not be processed at all: honest FAILED outcome.
+    log("warn", "discovery.record_failed", {
+      runId: run._id,
+      message: error instanceof Error ? error.message : String(error),
+    });
+    return {
+      status: "FAILED",
+      rejectionReason: "The record could not be processed.",
+    };
+  }
+}
 
 /**
  * Process one batch of raw records through the deterministic pipeline.
@@ -319,136 +540,63 @@ async function processRecords(
   const now = Date.now();
 
   for (const raw of records) {
-    try {
-      const normalized = normalizeRecord(raw, CSV_IMPORT_CONFIDENCE);
-      const validation = validateRawRecord(raw);
-
-      if (!validation.valid) {
+    const outcome = await processRecord(ctx, run, raw, candidates, now);
+    switch (outcome.status) {
+      case "ACCEPTED":
+        await ctx.db.insert("discoveryResults", {
+          runId: run._id,
+          providerSlug: run.providerSlug,
+          status: "ACCEPTED",
+          raw,
+          normalized: outcome.normalized,
+          businessId: outcome.businessId,
+          confidence: outcome.normalized.confidence,
+          retrievedAt: now,
+          createdAt: now,
+        });
+        accepted += 1;
+        break;
+      case "DUPLICATE":
+        await ctx.db.insert("discoveryResults", {
+          runId: run._id,
+          providerSlug: run.providerSlug,
+          status: "DUPLICATE",
+          raw,
+          normalized: outcome.normalized,
+          duplicateOf: outcome.duplicateOf,
+          duplicateSignal: outcome.duplicateSignal,
+          confidence: outcome.normalized.confidence,
+          retrievedAt: now,
+          createdAt: now,
+        });
+        duplicates += 1;
+        break;
+      case "REJECTED":
         await ctx.db.insert("discoveryResults", {
           runId: run._id,
           providerSlug: run.providerSlug,
           status: "REJECTED",
           raw,
-          normalized,
-          rejectionReason: validation.reasons.join(" "),
-          confidence: normalized.confidence,
+          normalized: outcome.normalized,
+          rejectionReason: outcome.rejectionReason,
+          confidence: outcome.normalized.confidence,
           retrievedAt: now,
           createdAt: now,
         });
         rejected += 1;
-        continue;
-      }
-
-      const match = findDuplicate(normalized, candidates);
-      if (match.matched && match.businessId && match.signal) {
-        const existingBusiness = await ctx.db.get(
-          match.businessId as Id<"businesses">,
-        );
-        if (existingBusiness) {
-          // Controlled enrichment: fill only empty fields on high-confidence
-          // signals; never overwrite; never destroy data.
-          const updates = enrichmentUpdates(
-            {
-              website: existingBusiness.website,
-              phone: existingBusiness.phone,
-              email: existingBusiness.email,
-              city: existingBusiness.city,
-              category: existingBusiness.category,
-            },
-            normalized,
-            match.signal,
-          );
-          if (Object.keys(updates).length > 0) {
-            await ctx.db.patch(existingBusiness._id, {
-              ...updates,
-              updatedAt: now,
-            });
-          }
-          await ctx.db.insert("discoveryResults", {
-            runId: run._id,
-            providerSlug: run.providerSlug,
-            status: "DUPLICATE",
-            raw,
-            normalized,
-            duplicateOf: existingBusiness._id,
-            duplicateSignal: match.signal,
-            confidence: normalized.confidence,
-            retrievedAt: now,
-            createdAt: now,
-          });
-          duplicates += 1;
-          continue;
-        }
-      }
-
-      const businessId = await ctx.db.insert("businesses", {
-        company: normalized.company,
-        contactName: normalized.contactName,
-        email: normalized.email,
-        phone: normalized.phone,
-        website: normalized.website,
-        websiteState: "UNKNOWN",
-        websiteStatus: normalized.websiteStatus,
-        websiteCheckedAt: undefined,
-        websiteHttpStatus: undefined,
-        city: normalized.city ?? run.city,
-        category: normalized.category ?? run.category,
-        address: normalized.address,
-        socials: normalized.socials,
-        whatsapp: normalized.whatsapp,
-        source: "DISCOVERY",
-        marketCode: run.marketCode,
-        region: normalized.region ?? run.region,
-        stage: "DISCOVERED",
-        score: undefined,
-        campaignId: run.campaignId,
-        convertedClientId: undefined,
-        confidence: normalized.confidence,
-        discoveredBy: run.providerSlug,
-        discoveryRunId: run._id,
-        discoveredAt: now,
-        sourceReference: normalized.sourceReference,
-        notes: normalized.notes,
-        updatedAt: now,
-      });
-      candidates.push(
-        toBusinessIdentity({
-          id: businessId,
-          company: normalized.company,
-          city: normalized.city,
-          website: normalized.website,
-          phone: normalized.phone,
-          email: normalized.email,
-        }),
-      );
-      await ctx.db.insert("discoveryResults", {
-        runId: run._id,
-        providerSlug: run.providerSlug,
-        status: "ACCEPTED",
-        raw,
-        normalized,
-        businessId,
-        confidence: normalized.confidence,
-        retrievedAt: now,
-        createdAt: now,
-      });
-      accepted += 1;
-    } catch (error) {
-      // A record that could not be processed at all: honest FAILED outcome.
-      failed += 1;
-      log("warn", "discovery.record_failed", {
-        runId: run._id,
-        message: error instanceof Error ? error.message : String(error),
-      });
-      await ctx.db.insert("discoveryResults", {
-        runId: run._id,
-        providerSlug: run.providerSlug,
-        status: "FAILED",
-        raw,
-        rejectionReason: "The record could not be processed.",
-        retrievedAt: now,
-        createdAt: now,
-      });
+        break;
+      case "FAILED":
+        await ctx.db.insert("discoveryResults", {
+          runId: run._id,
+          providerSlug: run.providerSlug,
+          status: "FAILED",
+          raw,
+          rejectionReason: outcome.rejectionReason,
+          retrievedAt: now,
+          createdAt: now,
+        });
+        failed += 1;
+        break;
     }
   }
 
@@ -845,7 +993,176 @@ export const cancel = mutation({
   },
 });
 
+/**
+ * Retry the FAILED records of a run. Each failed row keeps its raw
+ * snapshot (provenance), so it can be re-processed through the same
+ * deterministic pipeline. Outcomes update the existing row in place with a
+ * `retriedAt` stamp; counters are recomputed from real outcomes.
+ */
+export const retryFailedRecords = mutation({
+  args: { runId: v.id("discoveryRuns") },
+  handler: async (ctx, { runId }) => {
+    const user = await requireUser(ctx);
+    const run = await ctx.db.get(runId);
+    if (!run) {
+      throw apiError("NOT_FOUND", "This discovery run no longer exists.");
+    }
+    if (run.failedCount === 0) {
+      throw apiError("CONFLICT", "There are no failed records to retry.");
+    }
+    const results = await ctx.db
+      .query("discoveryResults")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const failedRows = results.filter((row) => row.status === "FAILED");
+    if (failedRows.length === 0) {
+      throw apiError("CONFLICT", "There are no failed records to retry.");
+    }
+
+    const existing = await ctx.db.query("businesses").collect();
+    const candidates = existing.map((business) =>
+      toBusinessIdentity({
+        id: business._id,
+        company: business.company,
+        city: business.city,
+        website: business.website,
+        phone: business.phone,
+        email: business.email,
+      }),
+    );
+    const now = Date.now();
+
+    let accepted = 0;
+    let duplicates = 0;
+    let rejected = 0;
+    let stillFailed = 0;
+
+    for (const row of failedRows) {
+      const outcome = await processRecord(ctx, run, row.raw, candidates, now);
+      const patch: Partial<Doc<"discoveryResults">> = {
+        status: outcome.status,
+        retriedAt: now,
+      };
+      switch (outcome.status) {
+        case "ACCEPTED":
+          patch.businessId = outcome.businessId;
+          patch.normalized = outcome.normalized;
+          patch.confidence = outcome.normalized.confidence;
+          patch.rejectionReason = undefined;
+          patch.duplicateOf = undefined;
+          patch.duplicateSignal = undefined;
+          accepted += 1;
+          break;
+        case "DUPLICATE":
+          patch.normalized = outcome.normalized;
+          patch.duplicateOf = outcome.duplicateOf;
+          patch.duplicateSignal = outcome.duplicateSignal;
+          patch.confidence = outcome.normalized.confidence;
+          patch.rejectionReason = undefined;
+          duplicates += 1;
+          break;
+        case "REJECTED":
+          patch.normalized = outcome.normalized;
+          patch.rejectionReason = outcome.rejectionReason;
+          patch.businessId = undefined;
+          patch.duplicateOf = undefined;
+          patch.duplicateSignal = undefined;
+          rejected += 1;
+          break;
+        case "FAILED":
+          patch.rejectionReason = outcome.rejectionReason;
+          stillFailed += 1;
+          break;
+      }
+      await ctx.db.patch(row._id, patch);
+    }
+
+    const recovered = failedRows.length - stillFailed;
+    await ctx.db.patch(runId, {
+      acceptedCount: run.acceptedCount + accepted,
+      duplicateCount: run.duplicateCount + duplicates,
+      rejectedCount: run.rejectedCount + rejected,
+      failedCount: Math.max(0, run.failedCount - recovered),
+      updatedAt: now,
+    });
+    await recordActivity(ctx, {
+      type: "DISCOVERY_RETRIED",
+      description: `Retried ${failedRows.length} failed record${
+        failedRows.length === 1 ? "" : "s"
+      } — ${accepted} accepted, ${duplicates} duplicate${duplicates === 1 ? "" : "s"}, ${
+        rejected
+      } rejected, ${stillFailed} still failed`,
+      actorId: user._id,
+      entityType: "discoveryRun",
+      entityId: runId,
+    });
+    log("info", "discovery.retried", {
+      runId,
+      retried: failedRows.length,
+      accepted,
+      duplicates,
+      rejected,
+      stillFailed,
+    });
+    return {
+      retried: failedRows.length,
+      accepted,
+      duplicates,
+      rejected,
+      stillFailed,
+      failedCount: Math.max(0, run.failedCount - recovered),
+    };
+  },
+});
+
 /* ---------------------------- Website reachability ------------------------ */
+
+/**
+ * Perform a real reachability check on a single website: fetch the URL
+ * with a bounded timeout and return the honest outcome. The result is a
+ * status, not a quality claim.
+ */
+async function performWebsiteCheck(
+  website: string | undefined,
+): Promise<{
+  websiteStatus: WebsiteReachabilityState;
+  websiteHttpStatus: number | undefined;
+}> {
+  if (!website) {
+    return { websiteStatus: "NO_WEBSITE", websiteHttpStatus: undefined };
+  }
+  const canonical = canonicalizeUrl(website);
+  if (!canonical) {
+    return { websiteStatus: "INVALID_URL", websiteHttpStatus: undefined };
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(canonical.url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: { "user-agent": "AgencyStudio-HealthCheck/0.4" },
+    });
+    await response.body?.cancel().catch(() => {});
+    if (response.ok) {
+      return { websiteStatus: "HAS_WEBSITE", websiteHttpStatus: response.status };
+    }
+    if (response.status === 403 || response.status === 429) {
+      return { websiteStatus: "BLOCKED", websiteHttpStatus: response.status };
+    }
+    return { websiteStatus: "UNREACHABLE", websiteHttpStatus: response.status };
+  } catch (error) {
+    if (controller.signal.aborted) {
+      return { websiteStatus: "UNREACHABLE", websiteHttpStatus: undefined }; // timed out
+    }
+    if (error instanceof TypeError) {
+      return { websiteStatus: "UNREACHABLE", websiteHttpStatus: undefined }; // DNS/network
+    }
+    return { websiteStatus: "CHECK_FAILED", websiteHttpStatus: undefined };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** Internal read used by the website check action. */
 export const getBusiness = internalQuery({
@@ -853,7 +1170,12 @@ export const getBusiness = internalQuery({
   handler: async (ctx, { businessId }) => ctx.db.get(businessId),
 });
 
-/** Internal write used by the website check action. */
+/**
+ * Internal write used by the website check actions: persists the outcome
+ * and recomputes the business's automatic opportunity score, because the
+ * reachability signal is a scoring input. The score always reflects the
+ * latest verified state.
+ */
 export const setWebsiteCheck = internalMutation({
   args: {
     businessId: v.id("businesses"),
@@ -869,6 +1191,11 @@ export const setWebsiteCheck = internalMutation({
       updatedAt: args.websiteCheckedAt,
     });
     const business = await ctx.db.get(args.businessId);
+    if (business) {
+      await ctx.db.patch(args.businessId, {
+        opportunity: opportunityFromBusiness(business, args.websiteCheckedAt),
+      });
+    }
     await recordActivity(ctx, {
       type: "DISCOVERY_WEBSITE_CHECKED",
       description: `Website status for ${business?.company ?? "business"}: ${
@@ -881,9 +1208,8 @@ export const setWebsiteCheck = internalMutation({
 });
 
 /**
- * Perform a real reachability check on a business website: fetch the URL
- * with a bounded timeout and record the honest outcome. The result is a
- * status, not a quality claim.
+ * Perform a real reachability check on a business website. The result is
+ * an honest status derived from an actual fetch — never a claim.
  */
 export const checkWebsite = action({
   args: { businessId: v.id("businesses") },
@@ -909,63 +1235,153 @@ export const checkWebsite = action({
     }
 
     const checkedAt = Date.now();
-    let websiteStatus: WebsiteReachabilityState;
-    let websiteHttpStatus: number | undefined;
-
-    if (!business.website) {
-      websiteStatus = "NO_WEBSITE";
-    } else {
-      const canonical = canonicalizeUrl(business.website);
-      if (!canonical) {
-        websiteStatus = "INVALID_URL";
-      } else {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 10_000);
-        try {
-          const response = await fetch(canonical.url, {
-            redirect: "follow",
-            signal: controller.signal,
-            headers: { "user-agent": "AgencyStudio-HealthCheck/0.3" },
-          });
-          websiteHttpStatus = response.status;
-          if (response.ok) {
-            websiteStatus = "HAS_WEBSITE";
-          } else if (response.status === 403 || response.status === 429) {
-            websiteStatus = "BLOCKED";
-          } else {
-            websiteStatus = "UNREACHABLE";
-          }
-          await response.body?.cancel().catch(() => {});
-        } catch (error) {
-          if (controller.signal.aborted) {
-            websiteStatus = "UNREACHABLE"; // timed out — could not be reached
-          } else if (error instanceof TypeError) {
-            websiteStatus = "UNREACHABLE"; // DNS/network failure
-          } else {
-            websiteStatus = "CHECK_FAILED";
-          }
-        } finally {
-          clearTimeout(timer);
-        }
-      }
-    }
-
+    const outcome = await performWebsiteCheck(business.website);
     await ctx.runMutation(internal.discovery.setWebsiteCheck, {
       businessId,
-      websiteStatus,
-      websiteHttpStatus,
+      websiteStatus: outcome.websiteStatus,
+      websiteHttpStatus: outcome.websiteHttpStatus,
       websiteCheckedAt: checkedAt,
     });
     log("info", "discovery.website_check", {
       businessId,
-      websiteStatus,
-      websiteHttpStatus,
+      websiteStatus: outcome.websiteStatus,
+      websiteHttpStatus: outcome.websiteHttpStatus,
     });
     return {
-      websiteStatus,
-      websiteHttpStatus,
+      websiteStatus: outcome.websiteStatus,
+      websiteHttpStatus: outcome.websiteHttpStatus,
       website: business.website ?? null,
       checkedAt,
     };
+  },
+});
+
+/** Internal read: accepted businesses of a run that still need a check. */
+export const getRunBusinessesPendingWebsiteCheck = internalQuery({
+  args: { runId: v.id("discoveryRuns"), limit: v.number() },
+  handler: async (ctx, { runId, limit }) => {
+    const results = await ctx.db
+      .query("discoveryResults")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const businessIds = [
+      ...new Set(
+        results
+          .filter(
+            (row) => row.status === "ACCEPTED" && row.businessId !== undefined,
+          )
+          .map((row) => row.businessId as Id<"businesses">),
+      ),
+    ];
+    const businesses = (
+      await Promise.all(businessIds.map((id) => ctx.db.get(id)))
+    ).filter(
+      (business): business is Doc<"businesses"> =>
+        business !== null && business.websiteStatus === "UNKNOWN",
+    );
+    return businesses.slice(0, limit);
+  },
+});
+
+/** Internal write: one summary activity row for a completed batch check. */
+export const logWebsitesChecked = internalMutation({
+  args: {
+    runId: v.id("discoveryRuns"),
+    checked: v.number(),
+    counts: v.object({
+      UNKNOWN: v.number(),
+      HAS_WEBSITE: v.number(),
+      NO_WEBSITE: v.number(),
+      UNREACHABLE: v.number(),
+      INVALID_URL: v.number(),
+      BLOCKED: v.number(),
+      CHECK_FAILED: v.number(),
+    }),
+  },
+  handler: async (ctx, { runId, checked, counts }) => {
+    const summary = Object.entries(counts)
+      .filter(([, count]) => count > 0)
+      .map(
+        ([status, count]) =>
+          `${count} ${WEBSITE_REACHABILITY_LABELS[status as WebsiteReachabilityState]}`,
+      )
+      .join(", ");
+    await recordActivity(ctx, {
+      type: "DISCOVERY_WEBSITES_CHECKED",
+      description: `Website check batch — ${checked} business${
+        checked === 1 ? "" : "es"
+      } (${summary || "no reachable results"})`,
+      entityType: "discoveryRun",
+      entityId: runId,
+    });
+  },
+});
+
+/**
+ * Batch website reachability checks for a run's accepted businesses whose
+ * sites were never verified (websiteStatus UNKNOWN). Checks run
+ * sequentially with polite pacing — real rate-limit awareness — and every
+ * outcome is persisted with the same honest statuses as a single check.
+ * Results feed straight back into the automatic opportunity score.
+ */
+export const checkWebsitesBatch = action({
+  args: {
+    runId: v.id("discoveryRuns"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    { runId, limit },
+  ): Promise<{
+    checked: number;
+    results: Record<WebsiteReachabilityState, number>;
+  }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw apiError("UNAUTHENTICATED", "You must be signed in to do that.");
+    }
+    const take = Math.min(Math.max(limit ?? 50, 1), MAX_WEBSITE_CHECK_BATCH);
+    const businesses: Doc<"businesses">[] = await ctx.runQuery(
+      internal.discovery.getRunBusinessesPendingWebsiteCheck,
+      { runId, limit: take },
+    );
+
+    const results: Record<WebsiteReachabilityState, number> = {
+      UNKNOWN: 0,
+      HAS_WEBSITE: 0,
+      NO_WEBSITE: 0,
+      UNREACHABLE: 0,
+      INVALID_URL: 0,
+      BLOCKED: 0,
+      CHECK_FAILED: 0,
+    };
+
+    for (const business of businesses) {
+      const outcome = await performWebsiteCheck(business.website);
+      results[outcome.websiteStatus] += 1;
+      await ctx.runMutation(internal.discovery.setWebsiteCheck, {
+        businessId: business._id,
+        websiteStatus: outcome.websiteStatus,
+        websiteHttpStatus: outcome.websiteHttpStatus,
+        websiteCheckedAt: Date.now(),
+      });
+      if (businesses.length > 1) {
+        await sleep(WEBSITE_CHECK_PACING_MS);
+      }
+    }
+
+    if (businesses.length > 0) {
+      await ctx.runMutation(internal.discovery.logWebsitesChecked, {
+        runId,
+        checked: businesses.length,
+        counts: results,
+      });
+    }
+    log("info", "discovery.websites_checked", {
+      runId,
+      checked: businesses.length,
+      results,
+    });
+    return { checked: businesses.length, results };
   },
 });

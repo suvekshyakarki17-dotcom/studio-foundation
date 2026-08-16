@@ -20,6 +20,7 @@ import {
   type WebsiteState,
 } from "../shared/domain";
 import { canTransition, transitionError } from "../shared/pipeline";
+import { scoreOpportunity } from "../shared/discovery/score";
 import type { Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { recordActivity } from "./lib/activity";
@@ -158,6 +159,14 @@ export const stats = query({
       (sum, stage) => sum + byStage[stage],
       0,
     );
+    // Automatic opportunity assessments (Phase 3 lead intelligence).
+    const scoredBusinesses = businesses.filter(
+      (business) => business.opportunity !== undefined,
+    );
+    const opportunitySum = scoredBusinesses.reduce(
+      (sum, business) => sum + business.opportunity!.score,
+      0,
+    );
     return {
       total: businesses.length,
       byStage,
@@ -174,6 +183,14 @@ export const stats = query({
       ).length,
       scored,
       averageScore: scored > 0 ? Math.round(scoredSum / scored) : null,
+      opportunityScored: scoredBusinesses.length,
+      highOpportunity: scoredBusinesses.filter(
+        (business) => business.opportunity!.score >= HIGH_PRIORITY_SCORE,
+      ).length,
+      averageOpportunity:
+        scoredBusinesses.length > 0
+          ? Math.round(opportunitySum / scoredBusinesses.length)
+          : null,
     };
   },
 });
@@ -337,6 +354,78 @@ export const update = mutation({
       throw apiError("INTERNAL", "The business could not be reloaded.");
     }
     return updated;
+  },
+});
+
+/**
+ * Recompute automatic opportunity scores. With an id, re-scores one
+ * business (e.g. after the operator fixes a website or adds contact
+ * details); without one, re-scores every business from its real stored
+ * signals. Never fabricates: every score is derived deterministically.
+ */
+export const recomputeOpportunity = mutation({
+  args: { id: v.optional(v.id("businesses")) },
+  handler: async (ctx, { id }) => {
+    const user = await requireUser(ctx);
+    const now = Date.now();
+    const targets = id
+      ? [await ctx.db.get(id)].filter(
+          (business): business is NonNullable<typeof business> =>
+            business !== null,
+        )
+      : await ctx.db.query("businesses").collect();
+    if (id && targets.length === 0) {
+      throw apiError("NOT_FOUND", "This business no longer exists.");
+    }
+    let changed = 0;
+    let oldScore: number | undefined;
+    let newScore: number | undefined;
+    for (const business of targets) {
+      const assessment = scoreOpportunity({
+        websiteStatus: business.websiteStatus,
+        hasEmail: Boolean(business.email),
+        hasPhone: Boolean(business.phone),
+        hasContactName: Boolean(business.contactName),
+        hasCity: Boolean(business.city),
+        hasCategory: Boolean(business.category),
+      });
+      if (id) {
+        oldScore = business.opportunity?.score;
+        newScore = assessment.score;
+      }
+      await ctx.db.patch(business._id, {
+        opportunity: {
+          score: assessment.score,
+          factors: assessment.factors,
+          scoredAt: now,
+        },
+        updatedAt: now,
+      });
+      changed += 1;
+    }
+    if (id) {
+      await recordActivity(ctx, {
+        type: "OPPORTUNITY_SCORED",
+        description: `Opportunity score recomputed — ${targets[0]!.company} (${oldScore ?? "—"} → ${newScore ?? "—"})`,
+        actorId: user._id,
+        entityType: "business",
+        entityId: id,
+      });
+    } else {
+      await recordActivity(ctx, {
+        type: "OPPORTUNITY_SCORED",
+        description: `Opportunity scores recomputed for ${changed} business${
+          changed === 1 ? "" : "es"
+        }`,
+        actorId: user._id,
+        entityType: "business",
+      });
+    }
+    log("info", "business.opportunity_recomputed", {
+      id: id ?? "all",
+      changed,
+    });
+    return { changed };
   },
 });
 

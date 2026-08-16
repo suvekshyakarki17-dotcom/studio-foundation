@@ -154,6 +154,24 @@ export const businessSourceValidator = v.union(
 );
 export type BusinessSourceValidator = Infer<typeof businessSourceValidator>;
 
+/**
+ * Automatic opportunity assessment (Phase 3 lead intelligence). Derived
+ * deterministically from real signals by src/shared/discovery/score.ts —
+ * never fabricated. `factors` are the three axis sub-scores (website /
+ * contact / completeness) so the UI can show exactly why a business scored
+ * the way it did.
+ */
+export const opportunityScoreValidator = v.object({
+  score: v.number(),
+  factors: v.object({
+    website: v.number(),
+    contact: v.number(),
+    completeness: v.number(),
+  }),
+  scoredAt: v.number(),
+});
+export type OpportunityScoreValidator = Infer<typeof opportunityScoreValidator>;
+
 const schema = defineSchema(
   {
     // default auth tables using convex auth.
@@ -240,6 +258,8 @@ const schema = defineSchema(
       convertedClientId: v.optional(v.id("clients")),
       /** Provider confidence in this record's data (0..1) — not an opportunity score. */
       confidence: v.optional(v.number()),
+      /** Automatic opportunity assessment (Phase 3) — derived, transparent, honest. */
+      opportunity: v.optional(opportunityScoreValidator),
       /** Discovery provenance: where this record came from. */
       discoveredBy: v.optional(v.string()),
       discoveryRunId: v.optional(v.id("discoveryRuns")),
@@ -354,6 +374,8 @@ const schema = defineSchema(
       duplicateSignal: v.optional(v.string()),
       rejectionReason: v.optional(v.string()),
       confidence: v.optional(v.number()),
+      /** Set when a FAILED result is re-processed by a retry (provenance). */
+      retriedAt: v.optional(v.number()),
       retrievedAt: v.number(),
       createdAt: v.number(),
     })

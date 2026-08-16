@@ -4,12 +4,14 @@ import { useMutation, useQuery } from "convex/react";
 import {
   ArrowRight,
   Contact,
+  Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Trash2,
   UserPlus,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useOutletContext, useSearchParams } from "react-router";
 import type { StudioOutletContext } from "@/components/studio/app-shell";
@@ -62,9 +64,9 @@ import {
   SCORE_TIER_TONES,
   WEBSITE_STATE_LABELS,
   WEBSITE_STATE_TONES,
-  isHighPriority,
   scoreTier,
   type PipelineStage,
+  type ScoreTier,
 } from "@/shared/domain";
 
 const ALL = "ALL";
@@ -98,6 +100,9 @@ function PipelineContent() {
   );
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebouncedValue(search);
+  const [opportunityFilter, setOpportunityFilter] = useState<
+    ScoreTier | typeof ALL
+  >(ALL);
   const [editing, setEditing] = useState<Doc<"businesses"> | null>(null);
   const [converting, setConverting] = useState<Doc<"businesses"> | null>(null);
 
@@ -110,6 +115,34 @@ function PipelineContent() {
   const setStage = useMutation(api.businesses.setStage);
   const convertToClient = useMutation(api.businesses.convertToClient);
   const removeBusiness = useMutation(api.businesses.remove);
+  const recomputeOpportunity = useMutation(api.businesses.recomputeOpportunity);
+  const [rescoreBusy, setRescoreBusy] = useState(false);
+
+  // Opportunity tier is a derived view, applied client-side over the rows
+  // already fetched for the active stage/market/search filters.
+  const filteredBusinesses = useMemo(() => {
+    if (opportunityFilter === ALL) return businesses ?? [];
+    return (businesses ?? []).filter(
+      (business) =>
+        scoreTier(business.opportunity?.score) === opportunityFilter,
+    );
+  }, [businesses, opportunityFilter]);
+
+  const handleRescore = async () => {
+    setRescoreBusy(true);
+    try {
+      const { changed } = await recomputeOpportunity({});
+      toast(
+        `Recomputed automatic opportunity scores for ${changed} business${
+          changed === 1 ? "" : "es"
+        }`,
+      );
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setRescoreBusy(false);
+    }
+  };
 
   const handleStageChange = async (
     business: Doc<"businesses">,
@@ -148,7 +181,10 @@ function PipelineContent() {
   }
 
   const filterActive =
-    stageFilter !== ALL || marketFilter !== ALL || debouncedSearch.trim() !== "";
+    stageFilter !== ALL ||
+    marketFilter !== ALL ||
+    opportunityFilter !== ALL ||
+    debouncedSearch.trim() !== "";
 
   return (
     <div className="space-y-8">
@@ -186,12 +222,12 @@ function PipelineContent() {
           sub="In conversation right now"
         />
         <MetricCard
-          label="High priority"
-          value={stats.highPriority}
+          label="High opportunity"
+          value={stats.highOpportunity}
           sub={
-            stats.scored > 0
-              ? `Average score ${stats.averageScore}`
-              : "No scores set yet"
+            stats.opportunityScored > 0
+              ? `${stats.opportunityScored} auto-scored · avg ${stats.averageOpportunity ?? "—"}`
+              : "No automatic scores yet"
           }
         />
       </section>
@@ -259,12 +295,50 @@ function PipelineContent() {
                 ))}
               </SelectContent>
             </Select>
+            <Select
+              value={opportunityFilter}
+              onValueChange={(value) =>
+                setOpportunityFilter(value as ScoreTier | typeof ALL)
+              }
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-auto"
+                aria-label="Filter by opportunity tier"
+              >
+                <SelectValue placeholder="All opportunity" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All opportunity</SelectItem>
+                <SelectItem value="HIGH">High opportunity</SelectItem>
+                <SelectItem value="MEDIUM">Medium opportunity</SelectItem>
+                <SelectItem value="LOW">Low opportunity</SelectItem>
+              </SelectContent>
+            </Select>
+            {stats.opportunityScored < stats.total && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => void handleRescore()}
+                disabled={rescoreBusy}
+                title="Compute automatic opportunity scores for every business from its real signals"
+              >
+                {rescoreBusy ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                Re-score all
+              </Button>
+            )}
             <p className="ml-auto text-sm text-muted-foreground">
-              {businesses.length} {businesses.length === 1 ? "business" : "businesses"}
+              {filteredBusinesses.length}{" "}
+              {filteredBusinesses.length === 1 ? "business" : "businesses"}
             </p>
           </div>
 
-          {businesses.length === 0 ? (
+          {filteredBusinesses.length === 0 ? (
             <p className="px-5 py-16 text-center text-sm text-muted-foreground">
               No businesses match the current search and filters.
             </p>
@@ -285,7 +359,7 @@ function PipelineContent() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {businesses.map((business) => (
+                    {filteredBusinesses.map((business) => (
                       <TableRow key={business._id}>
                         <TableCell>
                           <p className="font-medium text-foreground">
@@ -313,30 +387,27 @@ function PipelineContent() {
                           {marketLabel(business.marketCode, business.region)}
                         </TableCell>
                         <TableCell>
-                          {business.score !== undefined &&
-                          business.score !== null ? (
-                            <span className="inline-flex items-center gap-1.5 text-xs font-medium">
-                              <span
-                                className={
-                                  isHighPriority(business.score)
-                                    ? "text-amber-700 dark:text-amber-300"
-                                    : "text-muted-foreground"
-                                }
-                              >
-                                {business.score}
-                              </span>
-                              <StatusBadge
-                                label={SCORE_TIER_LABELS[
-                                  scoreTier(business.score) ?? "LOW"
-                                ]}
-                                tone={SCORE_TIER_TONES[
-                                  scoreTier(business.score) ?? "LOW"
-                                ]}
+                          <div className="flex flex-col items-start gap-1">
+                            {business.opportunity ? (
+                              <OpportunityBadge
+                                score={business.opportunity.score}
+                                factors={business.opportunity.factors}
                               />
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                Not scored
+                              </span>
+                            )}
+                            {business.score !== undefined &&
+                              business.score !== null && (
+                                <span
+                                  className="text-xs text-muted-foreground"
+                                  title="Operator-set priority"
+                                >
+                                  Priority {business.score}
+                                </span>
+                              )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-muted-foreground">
                           {formatRelativeTime(business.updatedAt)}
@@ -395,7 +466,7 @@ function PipelineContent() {
 
               {/* Mobile cards */}
               <ul className="divide-y divide-border md:hidden">
-                {businesses.map((business) => (
+                {filteredBusinesses.map((business) => (
                   <li key={business._id} className="space-y-3 p-4">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
@@ -418,8 +489,13 @@ function PipelineContent() {
                         {WEBSITE_STATE_LABELS[business.websiteState]}
                       </span>
                       <span>{marketLabel(business.marketCode, business.region)}</span>
+                      {business.opportunity && (
+                        <span className="font-medium text-foreground">
+                          Auto {business.opportunity.score}
+                        </span>
+                      )}
                       {business.score !== undefined && business.score !== null && (
-                        <span>Score {business.score}</span>
+                        <span>Priority {business.score}</span>
                       )}
                       <span>{formatRelativeTime(business.updatedAt)}</span>
                     </div>
@@ -507,6 +583,26 @@ function PipelineContent() {
         onConfirm={handleConvert}
       />
     </div>
+  );
+}
+
+function OpportunityBadge({
+  score,
+  factors,
+}: {
+  score: number;
+  factors: { website: number; contact: number; completeness: number };
+}) {
+  const tier = scoreTier(score) ?? "LOW";
+  return (
+    <span
+      title={`Automatic opportunity score derived from real signals — website ${factors.website}/40, contact ${factors.contact}/30, completeness ${factors.completeness}/30`}
+    >
+      <StatusBadge
+        label={`Auto ${score} · ${SCORE_TIER_LABELS[tier]}`}
+        tone={SCORE_TIER_TONES[tier]}
+      />
+    </span>
   );
 }
 

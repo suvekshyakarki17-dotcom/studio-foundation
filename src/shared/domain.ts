@@ -433,6 +433,9 @@ export const ACTIVITY_TYPES = [
   "DISCOVERY_FAILED",
   "DISCOVERY_CANCELLED",
   "DISCOVERY_WEBSITE_CHECKED",
+  "DISCOVERY_WEBSITES_CHECKED",
+  "DISCOVERY_RETRIED",
+  "OPPORTUNITY_SCORED",
   // System
   "SYSTEM_EVENT",
 ] as const;
@@ -464,6 +467,9 @@ export const ACTIVITY_TYPE_LABELS: Record<ActivityType, string> = {
   DISCOVERY_FAILED: "Discovery failed",
   DISCOVERY_CANCELLED: "Discovery cancelled",
   DISCOVERY_WEBSITE_CHECKED: "Website status checked",
+  DISCOVERY_WEBSITES_CHECKED: "Websites checked",
+  DISCOVERY_RETRIED: "Failed records retried",
+  OPPORTUNITY_SCORED: "Opportunity scored",
   SYSTEM_EVENT: "System event",
 };
 

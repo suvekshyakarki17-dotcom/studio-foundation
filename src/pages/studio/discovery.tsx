@@ -51,6 +51,9 @@ import {
   CAMPAIGN_STATUS_TONES,
   KNOWN_MARKETS,
   PIPELINE_STAGE_LABELS,
+  SCORE_TIER_LABELS,
+  SCORE_TIER_TONES,
+  scoreTier,
   type StatusTone,
 } from "@/shared/domain";
 import {
@@ -82,6 +85,7 @@ type CampaignRow = Doc<"campaigns"> & {
 type RunRow = Doc<"discoveryRuns"> & { campaignName?: string };
 
 type RunDetailRow = Doc<"discoveryRuns"> & {
+  pendingWebsiteChecks: number;
   campaign: {
     id: string;
     name: string;
@@ -97,6 +101,10 @@ type ResultRow = Doc<"discoveryResults"> & {
     name?: string;
     stage?: string;
     websiteStatus?: WebsiteReachabilityState;
+    opportunity?: {
+      score: number;
+      factors: { website: number; contact: number; completeness: number };
+    };
   };
   duplicateOfBusiness?: { id: string; name?: string };
 };
@@ -615,7 +623,11 @@ function RunDetail({
 }: RunDetailProps) {
   const finishRun = useMutation(api.discovery.finish);
   const cancelRun = useMutation(api.discovery.cancel);
+  const retryFailed = useMutation(api.discovery.retryFailedRecords);
+  const checkWebsitesBatch = useAction(api.discovery.checkWebsitesBatch);
   const [busy, setBusy] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [checkingBatch, setCheckingBatch] = useState(false);
 
   const handleFinish = async () => {
     setBusy(true);
@@ -641,6 +653,44 @@ function RunDetail({
     }
   };
 
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      const result = await retryFailed({ runId: run._id });
+      toast(
+        `Retried ${result.retried} failed record${result.retried === 1 ? "" : "s"} — ${result.accepted} accepted, ${result.duplicates} duplicates, ${result.rejected} rejected, ${result.stillFailed} still failed`,
+      );
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const handleCheckBatch = async () => {
+    setCheckingBatch(true);
+    try {
+      const result = await checkWebsitesBatch({ runId: run._id });
+      const parts = Object.entries(result.results)
+        .filter(([, count]) => count > 0)
+        .map(
+          ([status, count]) =>
+            `${count} ${WEBSITE_REACHABILITY_LABELS[
+              status as WebsiteReachabilityState
+            ].toLowerCase()}`,
+        );
+      toast(
+        `Checked ${result.checked} website${result.checked === 1 ? "" : "s"} — ${
+          parts.length > 0 ? parts.join(", ") : "nothing to check"
+        }`,
+      );
+    } catch (error) {
+      toast.error(getErrorMessage(error));
+    } finally {
+      setCheckingBatch(false);
+    }
+  };
+
   const market = run.marketCode
     ? KNOWN_MARKETS.find((item) => item.code === run.marketCode)
     : undefined;
@@ -649,6 +699,8 @@ function RunDetail({
     : 0;
   const active = run.status === "RUNNING" || run.status === "QUEUED";
   const canImport = active && run.providerSlug === "csv-import";
+  const canRetry = run.failedCount > 0;
+  const canCheckBatch = run.pendingWebsiteChecks > 0;
 
   const [cityFilter, setCityFilter] = useState<string | typeof ALL>(ALL);
   const [categoryFilter, setCategoryFilter] = useState<string | typeof ALL>(ALL);
@@ -697,7 +749,41 @@ function RunDetail({
               {run.category ? ` · ${run.category}` : ""}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {canCheckBatch && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleCheckBatch()}
+                disabled={checkingBatch}
+                title="Run real reachability checks on every accepted business whose website was never verified"
+              >
+                {checkingBatch ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Radar className="size-3.5" />
+                )}
+                Check websites ({run.pendingWebsiteChecks})
+              </Button>
+            )}
+            {canRetry && (
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => void handleRetry()}
+                disabled={retrying}
+                title="Re-process the failed records through the pipeline"
+              >
+                {retrying ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RotateCcw className="size-3.5" />
+                )}
+                Retry failed ({run.failedCount})
+              </Button>
+            )}
             {active && (
               <>
                 {run.providerSlug === "csv-import" &&
@@ -1131,6 +1217,7 @@ function ResultsTable({ rows }: { rows: ResultRow[] }) {
               <TableHead>Website</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Email</TableHead>
+              <TableHead>Score</TableHead>
               <TableHead>Conf.</TableHead>
               <TableHead>Stage</TableHead>
               <TableHead>Outcome</TableHead>
@@ -1159,11 +1246,14 @@ function ResultsTable({ rows }: { rows: ResultRow[] }) {
                 <p className="font-medium text-foreground">
                   {row.normalized?.company ?? row.raw.company}
                 </p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {[row.normalized?.city, row.normalized?.category]
-                    .filter(Boolean)
-                    .join(" · ") || "No location"}
-                </p>
+            <p className="truncate text-xs text-muted-foreground">
+              {[row.normalized?.city, row.normalized?.category]
+                .filter(Boolean)
+                .join(" · ") || "No location"}
+              {row.business?.opportunity
+                ? ` · Auto ${row.business.opportunity.score}`
+                : ""}
+            </p>
               </div>
               <StatusBadge
                 label={DISCOVERY_RESULT_STATUS_LABELS[row.status]}
@@ -1267,6 +1357,28 @@ function ResultRow({
         <TableCell className="text-muted-foreground">
           {normalized?.email ?? "—"}
         </TableCell>
+        <TableCell>
+          {row.business?.opportunity ? (
+            <span
+              title={`Automatic opportunity score — website ${row.business.opportunity.factors.website}/40, contact ${row.business.opportunity.factors.contact}/30, completeness ${row.business.opportunity.factors.completeness}/30`}
+            >
+              <StatusBadge
+                label={`${row.business.opportunity.score} · ${
+                  SCORE_TIER_LABELS[
+                    scoreTier(row.business.opportunity.score) ?? "LOW"
+                  ]
+                }`}
+                tone={
+                  SCORE_TIER_TONES[
+                    scoreTier(row.business.opportunity.score) ?? "LOW"
+                  ]
+                }
+              />
+            </span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </TableCell>
         <TableCell className="tabular-nums text-muted-foreground">
           {normalized?.confidence !== undefined
             ? `${Math.round(normalized.confidence * 100)}%`
@@ -1297,7 +1409,7 @@ function ResultRow({
       {expanded && (
         <TableRow className="hover:bg-transparent">
           <TableCell />
-          <TableCell colSpan={9} className="bg-muted/20">
+          <TableCell colSpan={10} className="bg-muted/20">
             <div className="grid grid-cols-1 gap-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
               <DetailBlock
                 title="Outcome"
@@ -1337,6 +1449,21 @@ function ResultRow({
                   row.raw.whatsapp ? `WhatsApp: ${row.raw.whatsapp}` : undefined,
                   row.raw.notes ? `Notes: ${row.raw.notes}` : undefined,
                 ].filter(Boolean)}
+              />
+              <DetailBlock
+                title="Opportunity score"
+                lines={
+                  row.business?.opportunity
+                    ? [
+                        `Score: ${row.business.opportunity.score} / 100 (${SCORE_TIER_LABELS[
+                          scoreTier(row.business.opportunity.score) ?? "LOW"
+                        ]} opportunity)`,
+                        `Website: ${row.business.opportunity.factors.website} / 40`,
+                        `Contact: ${row.business.opportunity.factors.contact} / 30`,
+                        `Completeness: ${row.business.opportunity.factors.completeness} / 30`,
+                      ]
+                    : []
+                }
               />
               {normalized && normalized.identityKeys.length > 0 && (
                 <div className="sm:col-span-2 lg:col-span-3">

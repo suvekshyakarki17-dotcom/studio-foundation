@@ -44,7 +44,7 @@ src/
     pipeline.ts      # Pipeline transition rules (canTransition,
                      # transitionError) used by businesses.setStage
     discovery/       # Discovery record pipeline: normalize, validate, dedupe,
-                     # enrich (pure, shared with tests)
+                     # enrich, score (pure, shared with tests)
   lib/
     validation.ts    # Zod form schemas (incl. business + campaign)
     errors.ts        # Safe client-side error extraction
@@ -126,13 +126,27 @@ Discovery is real execution with honest accounting, not placeholder data:
 - **CSV import** (`discovery.start` + `submitRecords`): batches are atomic
   and idempotent via client-supplied `batchId`s; the run advances honestly
   and syncs campaign status on completion.
+- **Retries** (`discovery.retryFailedRecords`): FAILED results keep their
+  raw snapshot, so they can be re-processed through the same pipeline;
+  outcomes update the row in place with a `retriedAt` stamp and the run
+  counters are recomputed from real outcomes.
 - **Providers**: a working `csv-import` provider; every other provider slot
   stays `NOT_CONFIGURED` until something real is connected — no fake
   integrations.
-- **Website checks** (`discovery.checkWebsite`, an action): fetches a
-  business's URL with a bounded timeout and records the honest reachability
-  outcome (`HAS_WEBSITE | NO_WEBSITE | UNREACHABLE | BLOCKED | INVALID_URL |
-  CHECK_FAILED`) plus HTTP status.
+- **Website checks** (`discovery.checkWebsite` action, `checkWebsitesBatch`
+  action): fetch a business's URL with a bounded timeout and record the
+  honest reachability outcome (`HAS_WEBSITE | NO_WEBSITE | UNREACHABLE |
+  BLOCKED | INVALID_URL | CHECK_FAILED`) plus HTTP status. Batches run
+  sequentially with polite pacing (rate-limit awareness) and persist every
+  outcome.
+- **Opportunity scoring** (`src/shared/discovery/score.ts`): every accepted
+  record (and every business after a website check) gets a deterministic
+  0–100 qualification score from real signals only — website reachability
+  (0–40), contact availability (0–30), and data completeness (0–30). The
+  three factors are stored with the total so the UI can show exactly why a
+  business scored as it did, and the pipeline can filter by High / Medium /
+  Low opportunity (the Phase 3 "THRESHOLD" targeting). Recompute is
+  available via `businesses.recomputeOpportunity` (one or all).
 
 All run/result mutations authenticate, validate, write atomically, record
 activity entries, and log structured lines — same discipline as the other
@@ -227,6 +241,9 @@ The architecture leaves room for these without implementing them:
   today; AI/scraping providers are reserved slots that stay
   `NOT_CONFIGURED` until real integrations exist. Businesses carry
   `source` + `confidence` provenance for when they do.
+- Strong website-quality claims (later phase) — Phase 3 verifies
+  *reachability*, never design quality; opportunity scores are a
+  qualification heuristic with transparent factors, not a verdict.
 - Outreach (later phase) — campaigns are operator-driven records; no
   sending of any kind.
 - Website Factory (later phase) — reachability checks are real; no

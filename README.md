@@ -85,16 +85,27 @@ them (see `docs/architecture.md`).
 - **Providers**: a `csv-import` provider that actually works today; other
   provider slots stay honestly `NOT_CONFIGURED` until real integrations
   exist
-- **Website reachability checks**: a real `checkWebsite` action fetches
-  each business's site with a bounded timeout and records the honest
-  outcome (has website / no website / unreachable / blocked / invalid)
+- **Website reachability checks**: real actions (`checkWebsite` for one,
+  `checkWebsitesBatch` for a run's unverified sites, sequentially paced)
+  fetch each site with a bounded timeout and record the honest outcome
+  (has website / no website / unreachable / blocked / invalid)
+- **Retries**: FAILED results keep their raw snapshot and can be
+  re-processed through the pipeline (`retryFailedRecords`), with counters
+  recomputed from real outcomes and `retriedAt` provenance on each row
+- **Opportunity scoring**: every accepted record — and every business after
+  a website check — gets a transparent 0–100 qualification score derived
+  from real signals only (website reachability 40, contact 30,
+  completeness 30), with the factor breakdown stored so the UI shows why.
+  The pipeline filters by High / Medium / Low opportunity and can re-score
+  pre-existing businesses
 - **Discovery page**: provider cards (configured state + requirements),
   the new-run panel with campaign deep links (`?campaign=…`), run history
-  with per-run detail and results, result filtering/sorting, and CSV
-  import with live feedback
+  with per-run detail and results, result filtering/sorting, CSV import
+  with live feedback, per-run batch website checks, and failed-record
+  retries
 - Pipeline integration: accepted records become real pipeline businesses
-  with provenance (run, source, confidence); campaigns surface their
-  discovery readiness and missing fields
+  with provenance (run, source, confidence) and an automatic opportunity
+  score; campaigns surface their discovery readiness and missing fields
 
 ## Getting started
 

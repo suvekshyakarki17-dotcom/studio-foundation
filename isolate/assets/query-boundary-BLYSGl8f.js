@@ -1,0 +1,1 @@
+import{b as t}from"./react-vendor-D06ez0pQ.js";class o extends t.Component{state={error:null};static getDerivedStateFromError(r){return{error:r}}render(){return this.state.error?this.props.fallback(()=>this.setState({error:null})):this.props.children}}export{o as Q};

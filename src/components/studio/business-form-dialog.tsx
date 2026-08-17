@@ -23,7 +23,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { StatusBadge } from "@/components/studio/status-badge";
 import { getErrorMessage } from "@/lib/errors";
+import { formatDateTime } from "@/lib/format";
 import {
   businessEditSchema,
   businessFormSchema,
@@ -41,11 +43,63 @@ import {
   type PipelineStage,
   type WebsiteState,
 } from "@/shared/domain";
+import {
+  LEAD_QUALIFICATION_LABELS,
+  LEAD_QUALIFICATION_TONES,
+  WEBSITE_REACHABILITY_LABELS,
+  WEBSITE_REACHABILITY_TONES,
+  type LeadQualification,
+  type WebsiteReachabilityState,
+} from "@/shared/discovery";
 
 interface BusinessFormDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   business?: Doc<"businesses">;
+}
+
+function ReachabilityBadge({ status }: { status: WebsiteReachabilityState }) {
+  return (
+    <StatusBadge
+      label={WEBSITE_REACHABILITY_LABELS[status]}
+      tone={WEBSITE_REACHABILITY_TONES[status]}
+    />
+  );
+}
+
+/**
+ * The strict no-website gate badge. Only QUALIFIED rows are no-website
+ * leads; the reason is always attached so the operator can see exactly
+ * why a business was or was not qualified.
+ */
+function QualificationBadge({
+  qualification,
+  reason,
+}: {
+  qualification: LeadQualification | undefined;
+  reason?: string;
+}) {
+  if (qualification === undefined) {
+    return (
+      <span title="Verification has not run for this business yet">
+        <StatusBadge label="Pending verification" tone="neutral" />
+      </span>
+    );
+  }
+  const label =
+    qualification === "QUALIFIED"
+      ? "No website — verified"
+      : qualification === "REJECTED_HAS_WEBSITE"
+        ? "Has website — rejected"
+        : LEAD_QUALIFICATION_LABELS[qualification];
+  return (
+    <span title={reason ?? LEAD_QUALIFICATION_LABELS[qualification]}>
+      <StatusBadge
+        label={label}
+        tone={LEAD_QUALIFICATION_TONES[qualification]}
+      />
+    </span>
+  );
 }
 
 export function BusinessFormDialog({
@@ -233,6 +287,44 @@ export function BusinessFormDialog({
               />
             </div>
           </div>
+          {isEdit && business && (
+            <div className="space-y-2 rounded-md border border-border bg-muted/30 p-4">
+              <p className="text-xs font-medium text-foreground">
+                Verification — strict no-website gate
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <ReachabilityBadge status={business.websiteStatus} />
+                <QualificationBadge
+                  qualification={business.qualification}
+                  reason={business.qualificationReason}
+                />
+              </div>
+              <dl className="grid grid-cols-1 gap-x-6 gap-y-1 text-xs sm:grid-cols-2">
+                <div>
+                  <dt className="text-muted-foreground">Last checked</dt>
+                  <dd className="font-medium text-foreground">
+                    {business.websiteCheckedAt
+                      ? formatDateTime(business.websiteCheckedAt)
+                      : "Never verified"}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-muted-foreground">Discovered by</dt>
+                  <dd className="font-medium text-foreground">
+                    {business.discoveredBy ?? "Manually added"}
+                  </dd>
+                </div>
+                {business.qualificationReason && (
+                  <div className="sm:col-span-2">
+                    <dt className="text-muted-foreground">Reason</dt>
+                    <dd className="font-medium leading-5 text-foreground">
+                      {business.qualificationReason}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </div>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Current website</Label>

@@ -1,0 +1,17 @@
+{
+  "name": "Agency Studio",
+  "short_name": "Agency Studio",
+  "description": "A private operating system for a modern web agency.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f5f1",
+  "theme_color": "#1f1c18",
+  "icons": [
+    {
+      "src": "/logo.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

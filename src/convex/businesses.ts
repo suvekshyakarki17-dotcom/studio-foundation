@@ -21,16 +21,44 @@ import {
 } from "../shared/domain";
 import { canTransition, transitionError } from "../shared/pipeline";
 import { scoreOpportunity } from "../shared/discovery/score";
-import type { Id } from "./_generated/dataModel";
+import {
+  DEFAULT_WEBSITE_TARGET,
+  qualifyLead,
+  type LeadQualification,
+  type WebsiteTarget,
+} from "../shared/discovery";
+import type { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx } from "./_generated/server";
 import { recordActivity } from "./lib/activity";
 import { apiError, requireUser } from "./lib/errors";
 import { log } from "./lib/log";
 import {
   businessSourceValidator,
+  leadQualificationValidator,
   pipelineStageValidator,
   websiteStateValidator,
 } from "./schema";
+
+/**
+ * The website target a business was discovered under (run snapshot first,
+ * then campaign, then the strict NO_WEBSITE_ONLY default). Used whenever a
+ * signal changes so the qualification gate is re-derived from the real
+ * target, never guessed.
+ */
+async function websiteTargetForBusiness(
+  ctx: MutationCtx,
+  business: Doc<"businesses">,
+): Promise<WebsiteTarget> {
+  if (business.discoveryRunId) {
+    const run = await ctx.db.get(business.discoveryRunId);
+    if (run?.websiteTarget) return run.websiteTarget;
+  }
+  if (business.campaignId) {
+    const campaign = await ctx.db.get(business.campaignId);
+    if (campaign?.websiteTarget) return campaign.websiteTarget;
+  }
+  return DEFAULT_WEBSITE_TARGET;
+}
 
 function normalizeEmail(email: string | undefined): string | undefined {
   const trimmed = email?.trim();
@@ -86,6 +114,8 @@ export interface BusinessListArgs {
   stage?: PipelineStage;
   marketCode?: string;
   search?: string;
+  /** Strict no-website gate filter; PENDING = verification not run yet. */
+  qualification?: LeadQualification | "PENDING";
 }
 
 export const list = query({
@@ -93,13 +123,22 @@ export const list = query({
     stage: v.optional(pipelineStageValidator),
     marketCode: v.optional(v.string()),
     search: v.optional(v.string()),
+    qualification: v.optional(
+      v.union(leadQualificationValidator, v.literal("PENDING")),
+    ),
   },
-  handler: async (ctx, { stage, marketCode, search }) => {
+  handler: async (ctx, { stage, marketCode, search, qualification }) => {
     await requireUser(ctx);
     let rows = await ctx.db.query("businesses").collect();
     if (stage) rows = rows.filter((business) => business.stage === stage);
     if (marketCode) {
       rows = rows.filter((business) => business.marketCode === marketCode);
+    }
+    // Strict gate filter: PENDING = accepted but verification has not run.
+    if (qualification === "PENDING") {
+      rows = rows.filter((business) => business.qualification === undefined);
+    } else if (qualification) {
+      rows = rows.filter((business) => business.qualification === qualification);
     }
     const needle = search?.trim().toLowerCase();
     if (needle) {
@@ -327,12 +366,13 @@ export const update = mutation({
     } else {
       campaignId = existing.campaignId; // not touched
     }
-    await ctx.db.patch(args.id, {
+    const website = normalizeText(args.website);
+    const patch: Partial<Doc<"businesses">> = {
       company,
       contactName: normalizeText(args.contactName),
       email,
       phone: normalizeText(args.phone),
-      website: normalizeText(args.website),
+      website,
       websiteState: args.websiteState,
       source: args.source,
       marketCode,
@@ -341,7 +381,22 @@ export const update = mutation({
       campaignId,
       notes: normalizeText(args.notes),
       updatedAt: Date.now(),
-    });
+    };
+    // The strict gate only trusts verified state. When the operator
+    // changes the website URL itself, the previous verification (and any
+    // no-website qualification) is invalid — reset to UNKNOWN and re-derive
+    // the gate so the lead list never shows a stale "no website" claim.
+    if (website !== existing.website) {
+      const target = await websiteTargetForBusiness(ctx, existing);
+      const gate = qualifyLead("UNKNOWN", target);
+      patch.websiteStatus = "UNKNOWN";
+      patch.websiteCheckedAt = undefined;
+      patch.websiteHttpStatus = undefined;
+      patch.qualification = gate.qualification;
+      patch.qualificationReason = `${gate.reason} Website changed by the operator — a new verification check is required before it can qualify.`;
+      patch.qualifiedAt = undefined;
+    }
+    await ctx.db.patch(args.id, patch);
     await recordActivity(ctx, {
       type: "BUSINESS_UPDATED",
       description: `Business updated — ${company}`,

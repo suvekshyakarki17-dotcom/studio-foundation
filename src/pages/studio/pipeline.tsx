@@ -63,13 +63,23 @@ import {
   SCORE_TIER_LABELS,
   SCORE_TIER_TONES,
   WEBSITE_STATE_LABELS,
-  WEBSITE_STATE_TONES,
   scoreTier,
   type PipelineStage,
   type ScoreTier,
 } from "@/shared/domain";
+import {
+  LEAD_QUALIFICATION_LABELS,
+  LEAD_QUALIFICATION_TONES,
+  WEBSITE_REACHABILITY_LABELS,
+  WEBSITE_REACHABILITY_TONES,
+  type LeadQualification,
+  type WebsiteReachabilityState,
+} from "@/shared/discovery";
 
 const ALL = "ALL";
+
+/** PENDING = accepted but the strict verification has not run yet. */
+type QualificationFilter = LeadQualification | "PENDING" | typeof ALL;
 
 /** Light debounce so keystrokes don't fire a query per character. */
 function useDebouncedValue<T>(value: T, delay = 250): T {
@@ -103,6 +113,8 @@ function PipelineContent() {
   const [opportunityFilter, setOpportunityFilter] = useState<
     ScoreTier | typeof ALL
   >(ALL);
+  const [qualificationFilter, setQualificationFilter] =
+    useState<QualificationFilter>(ALL);
   const [editing, setEditing] = useState<Doc<"businesses"> | null>(null);
   const [converting, setConverting] = useState<Doc<"businesses"> | null>(null);
 
@@ -110,6 +122,9 @@ function PipelineContent() {
     ...(stageFilter === ALL ? {} : { stage: stageFilter }),
     ...(marketFilter === ALL ? {} : { marketCode: marketFilter }),
     ...(debouncedSearch.trim() ? { search: debouncedSearch } : {}),
+    ...(qualificationFilter === ALL
+      ? {}
+      : { qualification: qualificationFilter }),
   });
   const stats = useQuery(api.businesses.stats);
   const setStage = useMutation(api.businesses.setStage);
@@ -184,6 +199,7 @@ function PipelineContent() {
     stageFilter !== ALL ||
     marketFilter !== ALL ||
     opportunityFilter !== ALL ||
+    qualificationFilter !== ALL ||
     debouncedSearch.trim() !== "";
 
   return (
@@ -315,6 +331,29 @@ function PipelineContent() {
                 <SelectItem value="LOW">Low opportunity</SelectItem>
               </SelectContent>
             </Select>
+            <Select
+              value={qualificationFilter}
+              onValueChange={(value) =>
+                setQualificationFilter(value as QualificationFilter)
+              }
+            >
+              <SelectTrigger
+                size="sm"
+                className="w-auto"
+                aria-label="Filter by no-website qualification"
+              >
+                <SelectValue placeholder="All qualifications" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All qualifications</SelectItem>
+                <SelectItem value="QUALIFIED">Qualified — no website</SelectItem>
+                <SelectItem value="REJECTED_HAS_WEBSITE">
+                  Rejected — has website
+                </SelectItem>
+                <SelectItem value="NOT_QUALIFIED">Not qualified</SelectItem>
+                <SelectItem value="PENDING">Pending verification</SelectItem>
+              </SelectContent>
+            </Select>
             {stats.opportunityScored < stats.total && (
               <Button
                 type="button"
@@ -352,6 +391,7 @@ function PipelineContent() {
                       <TableHead>Company</TableHead>
                       <TableHead>Stage</TableHead>
                       <TableHead>Website</TableHead>
+                      <TableHead>Qualified</TableHead>
                       <TableHead>Market</TableHead>
                       <TableHead>Score</TableHead>
                       <TableHead>Updated</TableHead>
@@ -366,10 +406,15 @@ function PipelineContent() {
                             {business.company}
                           </p>
                           <p className="max-w-[240px] truncate text-xs text-muted-foreground">
-                            {[business.contactName, business.email]
+                            {[business.contactName, business.email, business.address]
                               .filter(Boolean)
                               .join(" · ") || "No contact details"}
                           </p>
+                          {business.socials && business.socials.length > 0 && (
+                            <p className="max-w-[240px] truncate text-xs text-muted-foreground/80">
+                              {business.socials.join(" · ")}
+                            </p>
+                          )}
                         </TableCell>
                         <TableCell>
                           <StageSelect
@@ -378,9 +423,28 @@ function PipelineContent() {
                           />
                         </TableCell>
                         <TableCell>
-                          <StatusBadge
-                            label={WEBSITE_STATE_LABELS[business.websiteState]}
-                            tone={WEBSITE_STATE_TONES[business.websiteState]}
+                          <div className="flex flex-col items-start gap-1">
+                            <ReachabilityBadge status={business.websiteStatus} />
+                            {business.website ? (
+                              <a
+                                href={business.website}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="max-w-[160px] truncate text-xs text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+                              >
+                                {business.website.replace(/^https?:\/\//, "")}
+                              </a>
+                            ) : (
+                              <span className="text-xs text-muted-foreground/70">
+                                {WEBSITE_STATE_LABELS[business.websiteState]}
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <QualificationBadge
+                            qualification={business.qualification}
+                            reason={business.qualificationReason}
                           />
                         </TableCell>
                         <TableCell className="text-muted-foreground">
@@ -485,6 +549,11 @@ function PipelineContent() {
                       />
                     </div>
                     <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                      <ReachabilityBadge status={business.websiteStatus} />
+                      <QualificationBadge
+                        qualification={business.qualification}
+                        reason={business.qualificationReason}
+                      />
                       <span>
                         {WEBSITE_STATE_LABELS[business.websiteState]}
                       </span>
@@ -583,6 +652,50 @@ function PipelineContent() {
         onConfirm={handleConvert}
       />
     </div>
+  );
+}
+
+function ReachabilityBadge({ status }: { status: WebsiteReachabilityState }) {
+  return (
+    <StatusBadge
+      label={WEBSITE_REACHABILITY_LABELS[status]}
+      tone={WEBSITE_REACHABILITY_TONES[status]}
+    />
+  );
+}
+
+/**
+ * The strict no-website gate badge. Only QUALIFIED rows are no-website
+ * leads; the reason is always attached so the operator can see exactly
+ * why a business was or was not qualified.
+ */
+function QualificationBadge({
+  qualification,
+  reason,
+}: {
+  qualification: LeadQualification | undefined;
+  reason?: string;
+}) {
+  if (qualification === undefined) {
+    return (
+      <span title="Verification has not run for this business yet">
+        <StatusBadge label="Pending verification" tone="neutral" />
+      </span>
+    );
+  }
+  const label =
+    qualification === "QUALIFIED"
+      ? "No website — verified"
+      : qualification === "REJECTED_HAS_WEBSITE"
+        ? "Has website — rejected"
+        : LEAD_QUALIFICATION_LABELS[qualification];
+  return (
+    <span title={reason ?? LEAD_QUALIFICATION_LABELS[qualification]}>
+      <StatusBadge
+        label={label}
+        tone={LEAD_QUALIFICATION_TONES[qualification]}
+      />
+    </span>
   );
 }
 

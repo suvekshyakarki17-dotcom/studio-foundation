@@ -12,6 +12,7 @@ import type {
   DiscoveryRawRecord,
   WebsiteReachabilityState,
 } from "../discovery";
+import { assessEmail } from "./quality";
 
 /**
  * Known directory, aggregator, and social domains that are never the
@@ -236,10 +237,18 @@ export function normalizeRecord(
   confidence: number,
 ): DiscoveryNormalizedRecord {
   const canonical = canonicalizeUrl(raw.website);
+  // Phase 4 (§15): emails are assessed honestly. An address that fails
+  // syntax is dropped (never persisted as a lead email); a valid address
+  // is stored with its status so the UI never overclaims verification.
+  const emailAssessment = assessEmail(raw.email);
   const normalized: DiscoveryNormalizedRecord = {
     company: normalizeName(raw.company) ?? "",
     contactName: normalizeName(raw.contactName),
-    email: normalizeEmail(raw.email),
+    email: emailAssessment.normalized,
+    emailStatus:
+      emailAssessment.status === "UNVERIFIED"
+        ? undefined
+        : emailAssessment.status,
     phone: normalizePhone(raw.phone),
     website: canonical?.url,
     canonicalDomain: canonical?.domain,

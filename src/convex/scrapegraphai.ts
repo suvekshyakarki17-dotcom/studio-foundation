@@ -530,11 +530,17 @@ async function verifyRunWebsites(
             });
             const outcome = await performWebsiteCheck(item.website);
             reachability[outcome.websiteStatus] += 1;
+            // Phase 4 provenance: the verified URL came from the official-
+            // website resolution search, then was reachability-checked.
             await ctx.runMutation(internal.discovery.setWebsiteCheck, {
               businessId: business._id,
               websiteStatus: outcome.websiteStatus,
               websiteHttpStatus: outcome.websiteHttpStatus,
               websiteCheckedAt: Date.now(),
+              websiteCheckedUrl: canonicalizeUrl(item.website)?.url,
+              websiteFinalUrl: outcome.websiteFinalUrl,
+              websiteVerificationMethod: "RESOLUTION_SEARCH",
+              websiteVerificationSource: sourceReference,
             });
             await sleep(WEBSITE_CHECK_PACING_MS);
             continue;

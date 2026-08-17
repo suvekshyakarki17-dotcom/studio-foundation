@@ -21,10 +21,12 @@ import {
 } from "../shared/domain";
 import { canTransition, transitionError } from "../shared/pipeline";
 import { scoreOpportunity } from "../shared/discovery/score";
+import { assessEmail } from "../shared/discovery/quality";
 import {
   DEFAULT_WEBSITE_TARGET,
   qualifyLead,
   type LeadQualification,
+  type WebsiteReachabilityState,
   type WebsiteTarget,
 } from "../shared/discovery";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -32,10 +34,12 @@ import { mutation, query, type MutationCtx } from "./_generated/server";
 import { recordActivity } from "./lib/activity";
 import { apiError, requireUser } from "./lib/errors";
 import { log } from "./lib/log";
+import { dataQualityFromBusiness } from "./lib/quality";
 import {
   businessSourceValidator,
   leadQualificationValidator,
   pipelineStageValidator,
+  websiteReachabilityValidator,
   websiteStateValidator,
 } from "./schema";
 
@@ -116,7 +120,23 @@ export interface BusinessListArgs {
   search?: string;
   /** Strict no-website gate filter; PENDING = verification not run yet. */
   qualification?: LeadQualification | "PENDING";
+  /** Phase 4 §23: website reachability filter. */
+  websiteStatus?: WebsiteReachabilityState;
+  /** Phase 4 §23: contact availability (phone / email / social / none). */
+  contactAvailability?: "phone" | "email" | "social" | "none";
+  /** Phase 4 §23: business category filter. */
+  category?: string;
+  /** Phase 4 §24: server-side sort. */
+  sort?: BusinessListSort;
 }
+
+export type BusinessListSort =
+  | "updated"
+  | "name"
+  | "opportunity"
+  | "confidence"
+  | "quality"
+  | "discovered";
 
 export const list = query({
   args: {
@@ -126,8 +146,31 @@ export const list = query({
     qualification: v.optional(
       v.union(leadQualificationValidator, v.literal("PENDING")),
     ),
+    websiteStatus: v.optional(websiteReachabilityValidator),
+    contactAvailability: v.optional(
+      v.union(
+        v.literal("phone"),
+        v.literal("email"),
+        v.literal("social"),
+        v.literal("none"),
+      ),
+    ),
+    category: v.optional(v.string()),
+    sort: v.optional(
+      v.union(
+        v.literal("updated"),
+        v.literal("name"),
+        v.literal("opportunity"),
+        v.literal("confidence"),
+        v.literal("quality"),
+        v.literal("discovered"),
+      ),
+    ),
   },
-  handler: async (ctx, { stage, marketCode, search, qualification }) => {
+  handler: async (
+    ctx,
+    { stage, marketCode, search, qualification, websiteStatus, contactAvailability, category, sort },
+  ) => {
     await requireUser(ctx);
     let rows = await ctx.db.query("businesses").collect();
     if (stage) rows = rows.filter((business) => business.stage === stage);
@@ -140,6 +183,37 @@ export const list = query({
     } else if (qualification) {
       rows = rows.filter((business) => business.qualification === qualification);
     }
+    // Phase 4 §23 filters — each counts real stored fields only.
+    if (websiteStatus) {
+      rows = rows.filter(
+        (business) => business.websiteStatus === websiteStatus,
+      );
+    }
+    if (contactAvailability === "phone") {
+      rows = rows.filter((business) => Boolean(business.phone));
+    } else if (contactAvailability === "email") {
+      rows = rows.filter((business) => Boolean(business.email));
+    } else if (contactAvailability === "social") {
+      rows = rows.filter(
+        (business) =>
+          (business.socials !== undefined && business.socials.length > 0) ||
+          Boolean(business.googleMapsUrl),
+      );
+    } else if (contactAvailability === "none") {
+      rows = rows.filter(
+        (business) =>
+          !business.phone &&
+          !business.email &&
+          !(business.socials !== undefined && business.socials.length > 0) &&
+          !business.googleMapsUrl,
+      );
+    }
+    if (category) {
+      const needle = category.trim().toLowerCase();
+      rows = rows.filter(
+        (business) => business.category?.toLowerCase() === needle,
+      );
+    }
     const needle = search?.trim().toLowerCase();
     if (needle) {
       rows = rows.filter((business) =>
@@ -148,7 +222,24 @@ export const list = query({
           .some((field) => field!.toLowerCase().includes(needle)),
       );
     }
-    rows.sort((a, b) => b.updatedAt - a.updatedAt);
+    // Phase 4 §24: deterministic server-side sort.
+    const mode = sort ?? "updated";
+    rows.sort((a, b) => {
+      switch (mode) {
+        case "name":
+          return a.company.localeCompare(b.company);
+        case "opportunity":
+          return (b.opportunity?.score ?? -1) - (a.opportunity?.score ?? -1);
+        case "confidence":
+          return (b.websiteConfidence ?? -1) - (a.websiteConfidence ?? -1);
+        case "quality":
+          return (b.dataQuality?.completeness ?? -1) - (a.dataQuality?.completeness ?? -1);
+        case "discovered":
+          return (b.discoveredAt ?? b.updatedAt) - (a.discoveredAt ?? a.updatedAt);
+        default:
+          return b.updatedAt - a.updatedAt;
+      }
+    });
 
     // Enrich with campaign names so the UI can render linked campaigns.
     const campaignIds = [
@@ -282,12 +373,17 @@ export const create = mutation({
       }
     }
     const stage = args.stage ?? "DISCOVERED";
+    const website = normalizeText(args.website);
+    const notes = normalizeText(args.notes);
+    const now = Date.now();
     const id = await ctx.db.insert("businesses", {
       company,
       contactName: normalizeText(args.contactName),
       email,
+      // Phase 4 §15: email status is derived honestly at write time.
+      emailStatus: email ? assessEmail(email).status : undefined,
       phone: normalizeText(args.phone),
-      website: normalizeText(args.website),
+      website,
       websiteState: args.websiteState ?? "UNKNOWN",
       websiteStatus: "UNKNOWN",
       source: args.source ?? "MANUAL",
@@ -297,8 +393,22 @@ export const create = mutation({
       score: normalizeScore(args.score),
       campaignId: args.campaignId,
       convertedClientId: undefined,
-      notes: normalizeText(args.notes),
-      updatedAt: Date.now(),
+      notes,
+      // Phase 4 §17: lead data quality is derived from real fields.
+      dataQuality: dataQualityFromBusiness({
+        company,
+        category: undefined,
+        address: undefined,
+        city: undefined,
+        region,
+        marketCode,
+        phone: normalizeText(args.phone),
+        email,
+        googleMapsUrl: undefined,
+        socials: undefined,
+        notes,
+      }),
+      updatedAt: now,
     });
     await recordActivity(ctx, {
       type: "BUSINESS_CREATED",
@@ -392,9 +502,18 @@ export const update = mutation({
       patch.websiteStatus = "UNKNOWN";
       patch.websiteCheckedAt = undefined;
       patch.websiteHttpStatus = undefined;
+      patch.websiteConfidence = undefined;
+      patch.websiteCheckedUrl = undefined;
+      patch.websiteFinalUrl = undefined;
+      patch.websiteVerificationMethod = undefined;
+      patch.websiteVerificationSource = undefined;
       patch.qualification = gate.qualification;
       patch.qualificationReason = `${gate.reason} Website changed by the operator — a new verification check is required before it can qualify.`;
       patch.qualifiedAt = undefined;
+    }
+    // Phase 4 §15: an email change re-derives the honest validation state.
+    if (email !== existing.email) {
+      patch.emailStatus = email ? assessEmail(email).status : undefined;
     }
     await ctx.db.patch(args.id, patch);
     await recordActivity(ctx, {
@@ -408,7 +527,13 @@ export const update = mutation({
     if (!updated) {
       throw apiError("INTERNAL", "The business could not be reloaded.");
     }
-    return updated;
+    // Phase 4 §17: data quality always reflects the current real record.
+    await ctx.db.patch(args.id, {
+      dataQuality: dataQualityFromBusiness(updated),
+      updatedAt: updated.updatedAt,
+    });
+    const refreshed = await ctx.db.get(args.id);
+    return refreshed ?? updated;
   },
 });
 
@@ -454,6 +579,9 @@ export const recomputeOpportunity = mutation({
           factors: assessment.factors,
           scoredAt: now,
         },
+        // Phase 4 §17: data quality is recomputed from the same real record
+        // (a separate metric, stored separately, never merged into one).
+        dataQuality: dataQualityFromBusiness(business),
         updatedAt: now,
       });
       changed += 1;

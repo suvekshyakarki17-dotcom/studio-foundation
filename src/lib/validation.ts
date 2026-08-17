@@ -165,6 +165,9 @@ export const campaignFormSchema = z.object({
   targetCount: optionalTargetCount,
   targetKeywords: optionalText(300),
   websiteTarget: z.enum(WEBSITE_TARGETS).default(DEFAULT_WEBSITE_TARGET),
+  minimumOpportunity: z
+    .enum(["LOW", "MEDIUM", "HIGH", "VERY_HIGH"] as const)
+    .optional(),
 });
 export type CampaignFormValues = z.infer<typeof campaignFormSchema>;
 

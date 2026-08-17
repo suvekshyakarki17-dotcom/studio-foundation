@@ -9,6 +9,11 @@ import {
   WEBSITE_TARGETS,
 } from "../shared/discovery";
 import {
+  CONFIDENCE_TIERS,
+  EMAIL_STATUSES,
+  WEBSITE_VERIFICATION_METHODS,
+} from "../shared/discovery/quality";
+import {
   ACTIVITY_TYPES,
   BUSINESS_SOURCES,
   CAMPAIGN_STATUSES,
@@ -121,6 +126,36 @@ export const websiteTargetValidator = v.union(
 );
 export type WebsiteTargetValidator = Infer<typeof websiteTargetValidator>;
 
+export const emailStatusValidator = v.union(
+  ...EMAIL_STATUSES.map((status) => v.literal(status)),
+);
+export type EmailStatusValidator = Infer<typeof emailStatusValidator>;
+
+export const websiteVerificationMethodValidator = v.union(
+  ...WEBSITE_VERIFICATION_METHODS.map((method) => v.literal(method)),
+);
+export type WebsiteVerificationMethodValidator = Infer<
+  typeof websiteVerificationMethodValidator
+>;
+
+export const confidenceTierValidator = v.union(
+  ...CONFIDENCE_TIERS.map((tier) => v.literal(tier)),
+);
+export type ConfidenceTierValidator = Infer<typeof confidenceTierValidator>;
+
+/**
+ * Lead data quality (Phase 4 §17): a separate, honest completeness metric
+ * — never a substitute for the opportunity score. `completeness` is the
+ * weighted % of real public fields present; `tier` uses the shared
+ * confidence bands so every percentage means the same thing everywhere.
+ */
+export const dataQualityValidator = v.object({
+  completeness: v.number(),
+  tier: confidenceTierValidator,
+  scoredAt: v.number(),
+});
+export type DataQualityValidator = Infer<typeof dataQualityValidator>;
+
 /** Raw provider/operator record snapshot — untrusted, preserved for provenance. */
 export const discoveryRawRecordValidator = v.object({
   company: v.string(),
@@ -144,6 +179,7 @@ export const discoveryNormalizedRecordValidator = v.object({
   company: v.string(),
   contactName: v.optional(v.string()),
   email: v.optional(v.string()),
+  emailStatus: v.optional(emailStatusValidator),
   phone: v.optional(v.string()),
   website: v.optional(v.string()),
   canonicalDomain: v.optional(v.string()),
@@ -236,6 +272,8 @@ const schema = defineSchema(
       targetKeywords: v.optional(v.string()),
       /** Strict qualification target: NO_WEBSITE_ONLY (default) or ANY. */
       websiteTarget: v.optional(websiteTargetValidator),
+      /** Optional minimum opportunity tier for the operator's target list. */
+      minimumOpportunity: v.optional(confidenceTierValidator),
       updatedAt: v.number(),
     })
       .index("by_status", ["status"])
@@ -258,6 +296,23 @@ const schema = defineSchema(
       websiteStatus: websiteReachabilityValidator,
       websiteCheckedAt: v.optional(v.number()),
       websiteHttpStatus: v.optional(v.number()),
+      /** Phase 4 verification metadata — every value from a real check. */
+      websiteConfidence: v.optional(v.number()),
+      /** The exact URL that was checked (post-canonicalization). */
+      websiteCheckedUrl: v.optional(v.string()),
+      /** Final URL after redirects, when the check followed any. */
+      websiteFinalUrl: v.optional(v.string()),
+      websiteVerificationMethod: v.optional(websiteVerificationMethodValidator),
+      /** Provenance: where the verification evidence came from. */
+      websiteVerificationSource: v.optional(v.string()),
+      /** How far the recorded email was validated (Phase 4 §15). */
+      emailStatus: v.optional(emailStatusValidator),
+      /** Lead data quality — separate from opportunity (Phase 4 §17). */
+      dataQuality: v.optional(dataQualityValidator),
+      /** When enrichment actually added real public data to this lead. */
+      enrichedAt: v.optional(v.number()),
+      /** Provenance: the source of the last enrichment pass. */
+      enrichmentSource: v.optional(v.string()),
       city: v.optional(v.string()),
       category: v.optional(v.string()),
       address: v.optional(v.string()),
@@ -405,6 +460,8 @@ const schema = defineSchema(
       confidence: v.optional(v.number()),
       /** Set when a FAILED result is re-processed by a retry (provenance). */
       retriedAt: v.optional(v.number()),
+      /** How many times this result has been retried (Phase 4 §26). */
+      retryCount: v.optional(v.number()),
       retrievedAt: v.number(),
       createdAt: v.number(),
     })

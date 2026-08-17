@@ -463,6 +463,8 @@ export interface DiscoveryNormalizedRecord {
   company: string;
   contactName?: string;
   email?: string;
+  /** How far the email was validated (Phase 4 §15). */
+  emailStatus?: "VALIDATED" | "FOUND";
   phone?: string;
   website?: string;
   canonicalDomain?: string;

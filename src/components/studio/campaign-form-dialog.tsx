@@ -65,6 +65,7 @@ export function CampaignFormDialog({
   const [websiteTarget, setWebsiteTarget] = useState<WebsiteTarget>(
     DEFAULT_WEBSITE_TARGET,
   );
+  const [minimumOpportunity, setMinimumOpportunity] = useState<string>("");
 
   // Reset the form whenever the dialog opens (create or a different edit).
   useEffect(() => {
@@ -73,6 +74,7 @@ export function CampaignFormDialog({
     setRegion(campaign?.region ?? "");
     setStatus(campaign?.status ?? "DRAFT");
     setWebsiteTarget(campaign?.websiteTarget ?? DEFAULT_WEBSITE_TARGET);
+    setMinimumOpportunity(campaign?.minimumOpportunity ?? "");
     setError(null);
   }, [open, campaign]);
 
@@ -99,6 +101,8 @@ export function CampaignFormDialog({
       targetCount: data.get("targetCount"),
       targetKeywords: data.get("targetKeywords"),
       websiteTarget,
+      minimumOpportunity:
+        minimumOpportunity === "" ? undefined : minimumOpportunity,
     };
     const parsed = (isEdit ? campaignEditSchema : campaignFormSchema).safeParse({
       ...fields,
@@ -123,6 +127,7 @@ export function CampaignFormDialog({
           targetCount: parsed.data.targetCount,
           targetKeywords: parsed.data.targetKeywords,
           websiteTarget: parsed.data.websiteTarget,
+          minimumOpportunity: parsed.data.minimumOpportunity,
           status,
         });
         toast(`Campaign updated — ${parsed.data.name}`);
@@ -137,6 +142,7 @@ export function CampaignFormDialog({
           targetCount: parsed.data.targetCount,
           targetKeywords: parsed.data.targetKeywords,
           websiteTarget: parsed.data.websiteTarget,
+          minimumOpportunity: parsed.data.minimumOpportunity,
         });
         toast(`Campaign created — ${parsed.data.name}`);
       }
@@ -280,6 +286,30 @@ export function CampaignFormDialog({
               No website only: only businesses positively confirmed to have no
               official website qualify (the strict default). Any website state:
               every discovered business qualifies regardless of its site.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Minimum opportunity</Label>
+            <Select
+              value={minimumOpportunity}
+              onValueChange={(value) =>
+                setMinimumOpportunity(value === "__none__" ? "" : value)
+              }
+            >
+              <SelectTrigger aria-label="Minimum opportunity tier">
+                <SelectValue placeholder="Any opportunity" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Any opportunity</SelectItem>
+                <SelectItem value="VERY_HIGH">Very high</SelectItem>
+                <SelectItem value="HIGH">High</SelectItem>
+                <SelectItem value="MEDIUM">Medium</SelectItem>
+                <SelectItem value="LOW">Low</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-5 text-muted-foreground">
+              Optional floor for the opportunity tier you want to work — a
+              filter on the qualified list, never a claim about the business.
             </p>
           </div>
           <div className="space-y-1.5">

@@ -49,11 +49,17 @@ import {
   normalizeRecord,
 } from "../shared/discovery/normalize";
 import {
+  assessEmail,
+  scoreWebsiteConfidence,
+  type WebsiteVerificationMethod,
+} from "../shared/discovery/quality";
+import {
   scoreNormalizedRecord,
   scoreOpportunity,
 } from "../shared/discovery/score";
 import { validateRawRecord } from "../shared/discovery/validate";
 import { internal } from "./_generated/api";
+import { dataQualityFromBusiness } from "./lib/quality";
 import { performWebsiteCheck } from "./lib/website";
 import type { Doc, Id } from "./_generated/dataModel";
 import {
@@ -74,6 +80,7 @@ import {
   leadQualificationValidator,
   websiteReachabilityValidator,
   websiteTargetValidator,
+  websiteVerificationMethodValidator,
 } from "./schema";
 
 const MAX_BATCH_RECORDS = 200;
@@ -241,9 +248,29 @@ export const runsGet = query({
       (business) => business.websiteStatus === "UNKNOWN",
     ).length;
 
+    // Phase 4 §20: real qualification breakdown for the staged-progress view
+    // — every number is derived from accepted businesses' gate outcomes.
+    const qualificationCounts = {
+      QUALIFIED: 0,
+      REJECTED_HAS_WEBSITE: 0,
+      NOT_QUALIFIED: 0,
+      PENDING: 0,
+    };
+    for (const business of businesses) {
+      if (business.qualification === "QUALIFIED") qualificationCounts.QUALIFIED += 1;
+      else if (business.qualification === "REJECTED_HAS_WEBSITE") {
+        qualificationCounts.REJECTED_HAS_WEBSITE += 1;
+      } else if (business.qualification === "NOT_QUALIFIED") {
+        qualificationCounts.NOT_QUALIFIED += 1;
+      } else {
+        qualificationCounts.PENDING += 1;
+      }
+    }
+
     return {
       ...run,
       pendingWebsiteChecks,
+      qualificationCounts,
       campaign: campaign
         ? {
             id: campaign._id,
@@ -516,6 +543,7 @@ async function processRecord(
       company: normalized.company,
       contactName: normalized.contactName,
       email: normalized.email,
+      emailStatus: normalized.emailStatus,
       phone: normalized.phone,
       website: normalized.website,
       websiteState: "UNKNOWN",
@@ -1490,6 +1518,9 @@ export const retryFailedRecords = mutation({
       const patch: Partial<Doc<"discoveryResults">> = {
         status: outcome.status,
         retriedAt: now,
+        // Phase 4 §26: retries keep history — each pass increments a real
+        // retry count on the same row (original raw snapshot preserved).
+        retryCount: (row.retryCount ?? 0) + 1,
       };
       switch (outcome.status) {
         case "ACCEPTED":
@@ -1586,12 +1617,37 @@ export const setWebsiteCheck = internalMutation({
     websiteStatus: websiteReachabilityValidator,
     websiteHttpStatus: v.optional(v.number()),
     websiteCheckedAt: v.number(),
+    websiteConfidence: v.optional(v.number()),
+    websiteCheckedUrl: v.optional(v.string()),
+    websiteFinalUrl: v.optional(v.string()),
+    websiteVerificationMethod: v.optional(websiteVerificationMethodValidator),
+    websiteVerificationSource: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Phase 4 §8: confidence is derived from the real verification signals
+    // (method + outcome + HTTP status), never assumed.
+    const method: WebsiteVerificationMethod =
+      args.websiteVerificationMethod ?? "REACHABILITY";
+    const confidence =
+      args.websiteConfidence ??
+      scoreWebsiteConfidence({
+        method,
+        status: args.websiteStatus,
+        httpStatus: args.websiteHttpStatus,
+      });
     await ctx.db.patch(args.businessId, {
       websiteStatus: args.websiteStatus,
       websiteHttpStatus: args.websiteHttpStatus,
       websiteCheckedAt: args.websiteCheckedAt,
+      ...(confidence !== null ? { websiteConfidence: confidence } : {}),
+      ...(args.websiteCheckedUrl
+        ? { websiteCheckedUrl: args.websiteCheckedUrl }
+        : {}),
+      ...(args.websiteFinalUrl ? { websiteFinalUrl: args.websiteFinalUrl } : {}),
+      websiteVerificationMethod: method,
+      ...(args.websiteVerificationSource
+        ? { websiteVerificationSource: args.websiteVerificationSource }
+        : {}),
       updatedAt: args.websiteCheckedAt,
     });
     const business = await ctx.db.get(args.businessId);
@@ -1601,6 +1657,7 @@ export const setWebsiteCheck = internalMutation({
       const gate = qualifyLead(args.websiteStatus, target);
       await ctx.db.patch(args.businessId, {
         opportunity: opportunityFromBusiness(business, args.websiteCheckedAt),
+        dataQuality: dataQualityFromBusiness(business),
         qualification: gate.qualification,
         qualificationReason: gate.reason,
         qualifiedAt:
@@ -1681,6 +1738,10 @@ export const applyResolvedWebsite = internalMutation({
     }
     await ctx.db.patch(businessId, {
       website: canonical.url,
+      websiteCheckedUrl: canonical.url,
+      websiteVerificationMethod: "RESOLUTION_SEARCH" as const,
+      websiteVerificationSource:
+        sourceReference ?? business.sourceReference,
       sourceReference: sourceReference ?? business.sourceReference,
       updatedAt: Date.now(),
     });
@@ -1727,11 +1788,30 @@ export const applyConfirmedNoWebsite = internalMutation({
       existingCanonical && isDirectoryDomain(existingCanonical.domain)
         ? undefined
         : business.website;
+    // Enrichment only fills empty fields with real found values; track when
+    // it actually added something (Phase 4 §29 enrichment provenance).
+    const mergedSocials = mergeSocialUrls(business.socials, args.socials);
+    const enrichmentApplied =
+      Boolean(args.phone && !business.phone) ||
+      Boolean(args.email && !business.email) ||
+      Boolean(args.address && !business.address) ||
+      Boolean(args.googleMapsUrl && !business.googleMapsUrl) ||
+      (mergedSocials?.length ?? 0) > (business.socials?.length ?? 0);
     await ctx.db.patch(args.businessId, {
       websiteStatus: "NO_WEBSITE",
       websiteState: "NONE",
       website,
       websiteCheckedAt: now,
+      // Phase 4 §8: the resolution search found the business publicly with
+      // no official website — a real, positively-verified outcome.
+      websiteConfidence:
+        scoreWebsiteConfidence({
+          method: "RESOLUTION_SEARCH",
+          status: "NO_WEBSITE",
+          businessFound: true,
+        }) ?? undefined,
+      websiteVerificationMethod: "RESOLUTION_SEARCH",
+      websiteVerificationSource: args.sourceReference,
       qualification: gate.qualification,
       qualificationReason: reason,
       qualifiedAt: gate.qualification === "QUALIFIED" ? now : undefined,
@@ -1746,14 +1826,20 @@ export const applyConfirmedNoWebsite = internalMutation({
         args.googleMapsUrl && !business.googleMapsUrl
           ? normalizeName(args.googleMapsUrl)
           : business.googleMapsUrl,
-      socials: mergeSocialUrls(business.socials, args.socials),
+      socials: mergedSocials,
+      ...(enrichmentApplied
+        ? { enrichedAt: now, enrichmentSource: args.sourceReference }
+        : {}),
       sourceReference: args.sourceReference ?? business.sourceReference,
       updatedAt: now,
     });
     const updated = await ctx.db.get(args.businessId);
     if (updated) {
+      const emailStatus = updated.email ? assessEmail(updated.email).status : undefined;
       await ctx.db.patch(args.businessId, {
         opportunity: opportunityFromBusiness(updated, now),
+        dataQuality: dataQualityFromBusiness(updated),
+        ...(emailStatus ? { emailStatus } : {}),
       });
       await patchResultQualification(ctx, updated);
     }

@@ -22,7 +22,11 @@ import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/s
 import { recordActivity } from "./lib/activity";
 import { apiError, requireUser } from "./lib/errors";
 import { log } from "./lib/log";
-import { campaignStatusValidator, websiteTargetValidator } from "./schema";
+import {
+  campaignStatusValidator,
+  confidenceTierValidator,
+  websiteTargetValidator,
+} from "./schema";
 
 function normalizeText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -186,6 +190,8 @@ export const create = mutation({
     targetCount: v.optional(v.number()),
     targetKeywords: v.optional(v.string()),
     websiteTarget: v.optional(websiteTargetValidator),
+    /** Phase 4 §2/§19: optional minimum opportunity tier for the target list. */
+    minimumOpportunity: v.optional(confidenceTierValidator),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
@@ -212,6 +218,7 @@ export const create = mutation({
       targetCount: normalizeTargetCount(args.targetCount),
       targetKeywords: normalizeText(args.targetKeywords),
       websiteTarget,
+      minimumOpportunity: args.minimumOpportunity,
       updatedAt: Date.now(),
     });
     await recordActivity(ctx, {
@@ -238,6 +245,7 @@ export const update = mutation({
     targetCount: v.optional(v.number()),
     targetKeywords: v.optional(v.string()),
     websiteTarget: v.optional(websiteTargetValidator),
+    minimumOpportunity: v.optional(confidenceTierValidator),
     status: v.optional(campaignStatusValidator),
   },
   handler: async (ctx, args) => {
@@ -265,6 +273,7 @@ export const update = mutation({
       targetCount: normalizeTargetCount(args.targetCount),
       targetKeywords: normalizeText(args.targetKeywords),
       websiteTarget,
+      minimumOpportunity: args.minimumOpportunity,
       updatedAt: Date.now(),
     });
     if (args.status && args.status !== existing.status) {

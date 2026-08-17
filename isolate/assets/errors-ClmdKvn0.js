@@ -1,1 +1,0 @@
-import{f as t}from"./index-DaRhnqP-.js";function a(e){if(e instanceof t){const s=e.data;if(s&&typeof s.message=="string"&&s.message.length>0)return s.message}return e instanceof Error&&e.message.length>0?e.message:"Something went wrong. Please try again."}export{a as g};

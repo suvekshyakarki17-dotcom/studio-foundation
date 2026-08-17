@@ -4,7 +4,9 @@ import {
   SCRAPEGRAPHAI_MAX_RESULTS,
   SCRAPEGRAPHAI_SEARCH_ENDPOINT,
   buildLocalSearchPayload,
+  buildWebsiteResolutionPayload,
   mapSearchResponseToRecords,
+  mapWebsiteResolutionResponse,
 } from "./scrapegraphai";
 
 /* ------------------------------ Request build ---------------------------- */
@@ -132,6 +134,97 @@ describe("mapSearchResponseToRecords", () => {
       [],
     );
     expect(mapSearchResponseToRecords("{not json").records).toEqual([]);
+  });
+});
+
+/* ------------------------ Website resolution ----------------------------- */
+
+describe("buildWebsiteResolutionPayload", () => {
+  it("builds a single batched lookup covering every business", () => {
+    const payload = buildWebsiteResolutionPayload({
+      businesses: [
+        { name: "Joe's Pizza", city: "Miami", region: "Florida" },
+        { name: "Corner Grill", city: "Miami" },
+      ],
+      country: "us",
+    });
+    expect(payload.numResults).toBe(1);
+    expect(payload.country).toBe("us");
+    expect(payload.query).toContain("Joe's Pizza, Miami, Florida");
+    expect(payload.query).toContain("Corner Grill, Miami");
+    expect(payload.prompt).toContain("official");
+    expect(payload.prompt).toContain("Never invent");
+    expect(payload.schema).toHaveProperty("properties.businesses");
+  });
+});
+
+describe("mapWebsiteResolutionResponse", () => {
+  it("maps a resolution array with found/hasWebsite flags", () => {
+    const mapped = mapWebsiteResolutionResponse({
+      json: {
+        businesses: [
+          {
+            name: "Joe's Pizza",
+            found: true,
+            hasWebsite: false,
+            phone: "(305) 555-0100",
+            facebook: "facebook.com/joespizza",
+            details: "Listed on Yelp; no official site found",
+          },
+          {
+            name: "Corner Grill",
+            found: true,
+            hasWebsite: true,
+            website: "cornergrill.com",
+          },
+        ],
+      },
+    });
+    expect(mapped.returned).toBe(2);
+    expect(mapped.unmappable).toBe(0);
+    expect(mapped.items[0]).toMatchObject({
+      name: "Joe's Pizza",
+      found: true,
+      hasWebsite: false,
+      website: undefined,
+      phone: "(305) 555-0100",
+      facebook: "facebook.com/joespizza",
+    });
+    expect(mapped.items[1]).toMatchObject({
+      name: "Corner Grill",
+      hasWebsite: true,
+      website: "cornergrill.com",
+    });
+  });
+
+  it("never trusts a website when hasWebsite is false", () => {
+    const mapped = mapWebsiteResolutionResponse({
+      json: {
+        businesses: [
+          {
+            name: "Diner",
+            found: true,
+            hasWebsite: false,
+            website: "diner.example.com",
+          },
+        ],
+      },
+    });
+    expect(mapped.items[0].website).toBeUndefined();
+  });
+
+  it("coerces string booleans and drops entries without a name", () => {
+    const mapped = mapWebsiteResolutionResponse({
+      json: {
+        businesses: [
+          { name: "A", found: "true", hasWebsite: "no" },
+          { found: true, hasWebsite: false },
+        ],
+      },
+    });
+    expect(mapped.items).toHaveLength(1);
+    expect(mapped.items[0]).toMatchObject({ found: true, hasWebsite: false });
+    expect(mapped.unmappable).toBe(1);
   });
 });
 

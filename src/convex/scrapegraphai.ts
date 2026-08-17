@@ -34,11 +34,21 @@ import {
   SCRAPEGRAPHAI_MAX_RESULTS,
   SCRAPEGRAPHAI_SEARCH_ENDPOINT,
   buildLocalSearchPayload,
+  buildWebsiteResolutionPayload,
   mapSearchResponseToRecords,
+  mapWebsiteResolutionResponse,
+  type ScrapegraphaiSearchPayload,
 } from "../shared/discovery/scrapegraphai";
+import {
+  canonicalizeUrl,
+  isDirectoryDomain,
+} from "../shared/discovery/normalize";
 import { internal } from "./_generated/api";
-import type { Doc } from "./_generated/dataModel";
-import { action } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
+import {
+  action,
+  type ActionCtx,
+} from "./_generated/server";
 import { apiError } from "./lib/errors";
 import { log } from "./lib/log";
 import { performWebsiteCheck } from "./lib/website";
@@ -46,7 +56,7 @@ import { performWebsiteCheck } from "./lib/website";
 // The /search endpoint fetches each result page and runs an LLM extraction
 // pass, so a full request can take minutes on slower plans. The action
 // timeout (10 min) bounds the wait; this is the per-request cap.
-const API_TIMEOUT_MS = 150_000;
+const API_TIMEOUT_MS = 300_000;
 const WEBSITE_CHECK_PACING_MS = 250;
 const MAX_WEBSITE_CHECK_BATCH = 50;
 
@@ -79,17 +89,13 @@ interface ApiCallResult {
 }
 
 /**
- * Perform the real ScrapeGraphAI /search request for a local-business
- * discovery. Errors are mapped onto the shared DISCOVERY_ERROR_CODES so
- * the run detail page can render an honest, understood failure.
+ * Perform the real ScrapeGraphAI /search request for a given payload.
+ * Errors are mapped onto the shared DISCOVERY_ERROR_CODES so the run
+ * detail page can render an honest, understood failure.
  */
-async function callScrapegraphai(input: {
-  city?: string;
-  region?: string;
-  category?: string;
-  limit: number;
-  country?: string;
-}): Promise<ApiCallResult> {
+async function postSearch(
+  payload: ScrapegraphaiSearchPayload,
+): Promise<ApiCallResult> {
   if (!process.env.SGAI_API_KEY) {
     return {
       ok: false,
@@ -99,7 +105,6 @@ async function callScrapegraphai(input: {
     };
   }
   const startedAt = Date.now();
-  const payload = buildLocalSearchPayload(input);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
   try {
@@ -186,6 +191,21 @@ async function callScrapegraphai(input: {
   }
 }
 
+/**
+ * Perform the real ScrapeGraphAI /search request for a local-business
+ * discovery. Errors are mapped onto the shared DISCOVERY_ERROR_CODES so
+ * the run detail page can render an honest, understood failure.
+ */
+async function callScrapegraphai(input: {
+  city?: string;
+  region?: string;
+  category?: string;
+  limit: number;
+  country?: string;
+}): Promise<ApiCallResult> {
+  return postSearch(buildLocalSearchPayload(input));
+}
+
 /** First fetched page URL from the API response, for provenance. */
 function sourceReferenceFrom(json: unknown): string | undefined {
   if (json === null || typeof json !== "object") return undefined;
@@ -242,6 +262,7 @@ export const executeRun = action({
     duplicates: number;
     rejected: number;
     failed: number;
+    qualified: number;
     requestId?: string;
   }> => {
     const identity = await ctx.auth.getUserIdentity();
@@ -324,17 +345,26 @@ export const executeRun = action({
       records,
     });
 
+    // Real verification phase: reachability checks for records with a
+    // URL, official-website resolution for records without one, then the
+    // strict no-website qualification gate.
+    const verification = await verifyRunWebsites(ctx, runId);
+
     // The provider returned everything it had; if the run did not reach
     // the requested count, close it honestly (COMPLETED or PARTIAL).
     if (result.status === "RUNNING") {
       await ctx.runMutation(internal.discovery.finalizeRun, { runId });
     }
 
+    const finalized = await ctx.runQuery(internal.discovery.getRun, { runId });
     log("info", "scrapegraphai.execute_completed", {
       runId,
       requested: run.requestedCount,
       returned: mapped.returned,
       accepted: result.accepted,
+      qualified: finalized?.run.qualifiedCount ?? 0,
+      verified: verification.checked,
+      confirmedNoWebsite: verification.resolution.confirmedNoWebsite,
       status: result.status,
       requestId: apiCall.requestId,
     });
@@ -349,8 +379,239 @@ export const executeRun = action({
       duplicates: result.duplicates,
       rejected: result.rejected,
       failed: result.failed,
+      qualified: finalized?.run.qualifiedCount ?? 0,
       requestId: apiCall.requestId,
     };
+  },
+});
+
+/* --------------------------- Website verification ------------------------- */
+
+export interface WebsiteVerificationResult {
+  checked: number;
+  reachability: Record<WebsiteReachabilityState, number>;
+  resolution: {
+    checked: number;
+    foundWebsite: number;
+    confirmedNoWebsite: number;
+    notFound: number;
+    failed: number;
+    skipped: number;
+  };
+}
+
+/**
+ * The real verification phase of the strict no-website pipeline, run
+ * against a discovery run's accepted businesses:
+ *
+ *   1. Records WITH a usable URL → real reachability check → gate outcome
+ *      (HAS_WEBSITE rejects; UNREACHABLE/BLOCKED/… never qualify).
+ *   2. Records WITHOUT a usable URL → one batched ScrapeGraphAI
+ *      official-website resolution search. A credible official site found
+ *      → reachability check on it. The business found publicly but with
+ *      no official site → NO_WEBSITE confirmed → QUALIFIED. Everything
+ *      else (not found, search failed, no usable URL) → stays UNKNOWN →
+ *      NOT_QUALIFIED.
+ *
+ * No mock data, no assumptions: UNKNOWN only ever means unverified.
+ */
+async function verifyRunWebsites(
+  ctx: ActionCtx,
+  runId: Id<"discoveryRuns">,
+  limit?: number,
+): Promise<WebsiteVerificationResult> {
+  const take = Math.min(
+    Math.max(Math.floor(limit ?? MAX_WEBSITE_CHECK_BATCH) || 1, 1),
+    MAX_WEBSITE_CHECK_BATCH,
+  );
+  const businesses: Doc<"businesses">[] = await ctx.runQuery(
+    internal.discovery.getRunBusinessesPendingWebsiteCheck,
+    { runId, limit: take },
+  );
+  const reachability: Record<WebsiteReachabilityState, number> = {
+    UNKNOWN: 0,
+    HAS_WEBSITE: 0,
+    NO_WEBSITE: 0,
+    UNREACHABLE: 0,
+    INVALID_URL: 0,
+    BLOCKED: 0,
+    CHECK_FAILED: 0,
+  };
+  const resolution = {
+    checked: 0,
+    foundWebsite: 0,
+    confirmedNoWebsite: 0,
+    notFound: 0,
+    failed: 0,
+    skipped: 0,
+  };
+
+  // Records with a usable URL that is plausibly the business's own site:
+  // plain reachability checks. A known directory/aggregator URL is NOT a
+  // confirmed official website, so those records go through the official-
+  // website resolution search below instead.
+  const withUrl = businesses.filter((business) => {
+    const canonical = business.website ? canonicalizeUrl(business.website) : null;
+    return canonical !== null && !isDirectoryDomain(canonical.domain);
+  });
+  for (const business of withUrl) {
+    const outcome = await performWebsiteCheck(business.website);
+    reachability[outcome.websiteStatus] += 1;
+    await ctx.runMutation(internal.discovery.setWebsiteCheck, {
+      businessId: business._id,
+      websiteStatus: outcome.websiteStatus,
+      websiteHttpStatus: outcome.websiteHttpStatus,
+      websiteCheckedAt: Date.now(),
+    });
+    if (withUrl.length > 1) await sleep(WEBSITE_CHECK_PACING_MS);
+  }
+
+  // Records without a usable URL (or whose URL is a known directory):
+  // official-website resolution search.
+  const withoutUrl = businesses.filter((business) => {
+    const canonical = business.website ? canonicalizeUrl(business.website) : null;
+    return canonical === null || isDirectoryDomain(canonical.domain);
+  });
+  if (withoutUrl.length > 0) {
+    if (!isConfigured()) {
+      resolution.skipped = withoutUrl.length;
+      log("warn", "scrapegraphai.resolution_skipped", {
+        runId,
+        businesses: withoutUrl.length,
+        reason: "SGAI_API_KEY not configured",
+      });
+    } else {
+      resolution.checked = withoutUrl.length;
+      const run = await ctx.runQuery(internal.discovery.getRun, { runId });
+      const apiCall = await postSearch(
+        buildWebsiteResolutionPayload({
+          businesses: withoutUrl.map((business) => ({
+            name: business.company,
+            city: business.city,
+            region: business.region,
+            category: business.category,
+          })),
+          country: run?.run.marketCode?.toLowerCase(),
+        }),
+      );
+      if (!apiCall.ok || apiCall.json === null) {
+        resolution.failed = withoutUrl.length;
+        const message =
+          apiCall.errorMessage ?? "The website resolution request failed.";
+        for (const business of withoutUrl) {
+          await ctx.runMutation(internal.discovery.applyWebsiteUnverified, {
+            businessId: business._id,
+            reason: message,
+          });
+        }
+      } else {
+        const mapped = mapWebsiteResolutionResponse(apiCall.json);
+        const byName = new Map(
+          mapped.items.map((item) => [item.name.trim().toLowerCase(), item]),
+        );
+        const sourceReference = sourceReferenceFrom(apiCall.json);
+        for (const business of withoutUrl) {
+          const item = byName.get(business.company.trim().toLowerCase());
+          if (!item) {
+            resolution.notFound += 1;
+            await ctx.runMutation(internal.discovery.applyWebsiteUnverified, {
+              businessId: business._id,
+              reason:
+                "The verification search did not return this business — status left unknown.",
+            });
+            continue;
+          }
+          if (item.hasWebsite && item.website) {
+            resolution.foundWebsite += 1;
+            await ctx.runMutation(internal.discovery.applyResolvedWebsite, {
+              businessId: business._id,
+              website: item.website,
+              sourceReference,
+            });
+            const outcome = await performWebsiteCheck(item.website);
+            reachability[outcome.websiteStatus] += 1;
+            await ctx.runMutation(internal.discovery.setWebsiteCheck, {
+              businessId: business._id,
+              websiteStatus: outcome.websiteStatus,
+              websiteHttpStatus: outcome.websiteHttpStatus,
+              websiteCheckedAt: Date.now(),
+            });
+            await sleep(WEBSITE_CHECK_PACING_MS);
+            continue;
+          }
+          if (item.found && !item.hasWebsite) {
+            // Positive evidence of absence: the business exists publicly
+            // but no official website surfaced.
+            resolution.confirmedNoWebsite += 1;
+            const socials = [
+              item.instagram,
+              item.facebook,
+              item.tiktok,
+              item.linkedin,
+            ].filter((url): url is string => Boolean(url));
+            await ctx.runMutation(internal.discovery.applyConfirmedNoWebsite, {
+              businessId: business._id,
+              sourceReference,
+              details: item.details,
+              phone: item.phone,
+              email: item.email,
+              address: item.address,
+              googleMapsUrl: item.googleMapsUrl,
+              socials,
+            });
+            continue;
+          }
+          resolution.failed += 1;
+          await ctx.runMutation(internal.discovery.applyWebsiteUnverified, {
+            businessId: business._id,
+            reason: item.found
+              ? "The verification search reported a website but no usable URL — status left unknown."
+              : "The business was not found in public sources — absence not verified.",
+          });
+        }
+      }
+    }
+  }
+
+  if (businesses.length > 0) {
+    await ctx.runMutation(internal.discovery.logWebsitesChecked, {
+      runId,
+      checked: businesses.length,
+      counts: reachability,
+    });
+  }
+  log("info", "scrapegraphai.websites_verified", {
+    runId,
+    checked: businesses.length,
+    resolution,
+    reachability,
+  });
+  return { checked: businesses.length, reachability, resolution };
+}
+
+/**
+ * Public action: run the verification phase for a run's accepted
+ * businesses — real reachability checks plus (when SGAI_API_KEY is set)
+ * official-website resolution for businesses without a usable URL.
+ */
+export const verifyWebsites = action({
+  args: {
+    runId: v.id("discoveryRuns"),
+    limit: v.optional(v.number()),
+  },
+  handler: async (
+    ctx,
+    { runId, limit },
+  ): Promise<WebsiteVerificationResult> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw apiError("UNAUTHENTICATED", "You must be signed in to do that.");
+    }
+    const run = await ctx.runQuery(internal.discovery.getRun, { runId });
+    if (!run) {
+      throw apiError("NOT_FOUND", "This discovery run no longer exists.");
+    }
+    return verifyRunWebsites(ctx, runId, limit);
   },
 });
 
@@ -399,6 +660,20 @@ interface SmokeTestReport {
   websiteChecks: {
     checked: number;
     results: Record<WebsiteReachabilityState, number>;
+  };
+  websiteResolutions: {
+    checked: number;
+    foundWebsite: number;
+    confirmedNoWebsite: number;
+    notFound: number;
+    failed: number;
+    skipped: number;
+  };
+  qualifications: {
+    qualified: number;
+    rejectedHasWebsite: number;
+    notQualified: number;
+    pending: number;
   };
   database: {
     campaignId?: string;
@@ -499,6 +774,20 @@ export const smokeTest = action({
           BLOCKED: 0,
           CHECK_FAILED: 0,
         },
+      },
+      websiteResolutions: {
+        checked: 0,
+        foundWebsite: 0,
+        confirmedNoWebsite: 0,
+        notFound: 0,
+        failed: 0,
+        skipped: 0,
+      },
+      qualifications: {
+        qualified: 0,
+        rejectedHasWebsite: 0,
+        notQualified: 0,
+        pending: 0,
       },
       database: {
         businessesCreated: 0,
@@ -602,30 +891,13 @@ export const smokeTest = action({
     report.pipeline.rejected = ingest.rejected;
     report.pipeline.failed = ingest.failed;
 
-    // 4. Real website reachability checks on the accepted businesses.
-    const pending: Doc<"businesses">[] = await ctx.runQuery(
-      internal.discovery.getRunBusinessesPendingWebsiteCheck,
-      { runId, limit: MAX_WEBSITE_CHECK_BATCH },
-    );
-    for (const business of pending) {
-      const outcome = await performWebsiteCheck(business.website);
-      report.websiteChecks.results[outcome.websiteStatus] += 1;
-      report.websiteChecks.checked += 1;
-      await ctx.runMutation(internal.discovery.setWebsiteCheck, {
-        businessId: business._id,
-        websiteStatus: outcome.websiteStatus,
-        websiteHttpStatus: outcome.websiteHttpStatus,
-        websiteCheckedAt: Date.now(),
-      });
-      if (pending.length > 1) await sleep(WEBSITE_CHECK_PACING_MS);
-    }
-    if (pending.length > 0) {
-      await ctx.runMutation(internal.discovery.logWebsitesChecked, {
-        runId,
-        checked: pending.length,
-        counts: report.websiteChecks.results,
-      });
-    }
+    // 4. Real website verification: reachability checks for records with
+    //    a URL, official-website resolution for records without one, then
+    //    the strict no-website qualification gate.
+    const verification = await verifyRunWebsites(ctx, runId);
+    report.websiteChecks.checked = verification.checked;
+    report.websiteChecks.results = verification.reachability;
+    report.websiteResolutions = verification.resolution;
 
     // 5. Close the run honestly if the provider returned fewer than asked.
     if (ingest.status === "RUNNING") {
@@ -645,6 +917,24 @@ export const smokeTest = action({
         type: row.type,
         description: row.description,
       }));
+      const qualifications = {
+        qualified: 0,
+        rejectedHasWebsite: 0,
+        notQualified: 0,
+        pending: 0,
+      };
+      for (const row of snapshot.results) {
+        if (row.status !== "ACCEPTED") continue;
+        if (row.qualification === "QUALIFIED") qualifications.qualified += 1;
+        else if (row.qualification === "REJECTED_HAS_WEBSITE") {
+          qualifications.rejectedHasWebsite += 1;
+        } else if (row.qualification === "NOT_QUALIFIED") {
+          qualifications.notQualified += 1;
+        } else {
+          qualifications.pending += 1;
+        }
+      }
+      report.qualifications = qualifications;
       report.opportunityScores = snapshot.results
         .filter((row) => row.status === "ACCEPTED" && row.business)
         .map((row) => {

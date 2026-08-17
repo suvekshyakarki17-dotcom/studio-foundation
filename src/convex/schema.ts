@@ -4,7 +4,9 @@ import { Infer, v } from "convex/values";
 import {
   DISCOVERY_RESULT_STATUSES,
   DISCOVERY_RUN_STATUSES,
+  LEAD_QUALIFICATIONS,
   WEBSITE_REACHABILITY_STATES,
+  WEBSITE_TARGETS,
 } from "../shared/discovery";
 import {
   ACTIVITY_TYPES,
@@ -106,6 +108,18 @@ export const discoveryResultStatusValidator = v.union(
 export type DiscoveryResultStatusValidator = Infer<
   typeof discoveryResultStatusValidator
 >;
+
+export const leadQualificationValidator = v.union(
+  ...LEAD_QUALIFICATIONS.map((qualification) => v.literal(qualification)),
+);
+export type LeadQualificationValidator = Infer<
+  typeof leadQualificationValidator
+>;
+
+export const websiteTargetValidator = v.union(
+  ...WEBSITE_TARGETS.map((target) => v.literal(target)),
+);
+export type WebsiteTargetValidator = Infer<typeof websiteTargetValidator>;
 
 /** Raw provider/operator record snapshot — untrusted, preserved for provenance. */
 export const discoveryRawRecordValidator = v.object({
@@ -220,6 +234,8 @@ const schema = defineSchema(
       category: v.optional(v.string()),
       targetCount: v.optional(v.number()),
       targetKeywords: v.optional(v.string()),
+      /** Strict qualification target: NO_WEBSITE_ONLY (default) or ANY. */
+      websiteTarget: v.optional(websiteTargetValidator),
       updatedAt: v.number(),
     })
       .index("by_status", ["status"])
@@ -245,10 +261,16 @@ const schema = defineSchema(
       city: v.optional(v.string()),
       category: v.optional(v.string()),
       address: v.optional(v.string()),
+      /** Google Maps / business profile URL, when publicly found. */
+      googleMapsUrl: v.optional(v.string()),
       /** Public profile references legitimately provided by a source. */
       socials: v.optional(v.array(v.string())),
       /** Public business WhatsApp reference (stored, never messaged in Phase 3). */
       whatsapp: v.optional(v.string()),
+      /** Strict no-website qualification gate outcome (see qualifyLead). */
+      qualification: v.optional(leadQualificationValidator),
+      qualificationReason: v.optional(v.string()),
+      qualifiedAt: v.optional(v.number()),
       source: businessSourceValidator,
       marketCode: v.optional(v.string()),
       region: v.optional(v.string()),
@@ -341,6 +363,10 @@ const schema = defineSchema(
       rejectedCount: v.number(),
       failedCount: v.number(),
       processedCount: v.number(),
+      /** Accepted businesses that passed the campaign's website-target gate. */
+      qualifiedCount: v.number(),
+      /** Website target snapshot at start (derived from the campaign). */
+      websiteTarget: v.optional(websiteTargetValidator),
       errorCode: v.optional(v.string()),
       errorMessage: v.optional(v.string()),
       cancelledReason: v.optional(v.string()),
@@ -373,6 +399,9 @@ const schema = defineSchema(
       duplicateOf: v.optional(v.id("businesses")),
       duplicateSignal: v.optional(v.string()),
       rejectionReason: v.optional(v.string()),
+      /** Qualification gate outcome for ACCEPTED rows (see qualifyLead). */
+      qualification: v.optional(leadQualificationValidator),
+      qualificationReason: v.optional(v.string()),
       confidence: v.optional(v.number()),
       /** Set when a FAILED result is re-processed by a retry (provenance). */
       retriedAt: v.optional(v.number()),

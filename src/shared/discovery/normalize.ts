@@ -13,6 +13,90 @@ import type {
   WebsiteReachabilityState,
 } from "../discovery";
 
+/**
+ * Known directory, aggregator, and social domains that are never the
+ * official website of a business. When a discovery provider returns one
+ * of these as a business's "website", the strict gate does NOT treat it
+ * as a confirmed website — the business goes through official-website
+ * resolution instead. The list is deliberately conservative (root domains
+ * only); it is a guard against the most common false positives, not a
+ * claim of exhaustiveness.
+ */
+const DIRECTORY_DOMAINS = new Set([
+  // Reviews / directories
+  "yelp.com",
+  "yelp.ca",
+  "yelp.co.uk",
+  "yelp.fr",
+  "yelp.de",
+  "yelp.es",
+  "yelp.it",
+  "yelp.com.au",
+  "tripadvisor.com",
+  "tripadvisor.ca",
+  "tripadvisor.co.uk",
+  "tripadvisor.fr",
+  "tripadvisor.de",
+  "tripadvisor.es",
+  "opentable.com",
+  "opentable.co.uk",
+  "zomato.com",
+  "openrice.com",
+  "foursquare.com",
+  "citysearch.com",
+  // Business directories
+  "yellowpages.com",
+  "yellowpages.ca",
+  "yp.com",
+  "superpages.com",
+  "merchantcircle.com",
+  "hotfrog.com",
+  "manta.com",
+  "angieslist.com",
+  "thomsonlocal.com",
+  "cylex.us",
+  "cylex.us.com",
+  // Delivery / booking aggregators
+  "deliveroo.com",
+  "deliveroo.co.uk",
+  "ubereats.com",
+  "grubhub.com",
+  "doordash.com",
+  "just-eat.co.uk",
+  "just-eat.com",
+  "thefork.com",
+  "thefork.co.uk",
+  "booking.com",
+  // Social / search / reference
+  "facebook.com",
+  "instagram.com",
+  "linkedin.com",
+  "twitter.com",
+  "x.com",
+  "tiktok.com",
+  "youtube.com",
+  "google.com",
+  "google.ca",
+  "google.co.uk",
+  "google.de",
+  "google.fr",
+  "wikipedia.org",
+]);
+
+/**
+ * True when the canonical domain belongs to a known directory, aggregator,
+ * social, or search property — i.e. it cannot be a business's official
+ * website. Matches the root domain and any subdomain of it.
+ */
+export function isDirectoryDomain(domain: string): boolean {
+  const candidate = domain.trim().toLowerCase();
+  if (DIRECTORY_DOMAINS.has(candidate)) return true;
+  for (const known of DIRECTORY_DOMAINS) {
+    if (candidate.endsWith(`.${known}`)) return true;
+  }
+  return false;
+}
+
 /** Trim and collapse internal whitespace (e.g. "  Joe's   Pizza  " → "Joe's Pizza"). */
 export function normalizeName(value: string | undefined): string | undefined {
   const trimmed = value?.trim().replace(/\s+/g, " ");
@@ -109,14 +193,21 @@ export function canonicalizeUrl(value: string | undefined): CanonicalUrl | null 
 
 /**
  * Derive the reachability state from presence alone. This makes no
- * reachability claim: a syntactically valid URL stays UNKNOWN until a real
- * check runs; a missing website is NO_WEBSITE; an unusable URL is
- * INVALID_URL.
+ * reachability claim of any kind:
+ *
+ * - a missing website is UNKNOWN — the provider not returning a URL is
+ *   NEVER treated as proof of absence (the strict no-website gate only
+ *   accepts a real verification outcome);
+ * - a syntactically valid URL stays UNKNOWN until a real check runs;
+ * - an unusable URL is INVALID_URL (still unverified).
+ *
+ * The only code that may set NO_WEBSITE is the verification step that
+ * positively confirmed no official website exists.
  */
 export function deriveWebsiteReachability(
   website: string | undefined,
 ): WebsiteReachabilityState {
-  if (!website) return "NO_WEBSITE";
+  if (!website) return "UNKNOWN";
   return canonicalizeUrl(website) ? "UNKNOWN" : "INVALID_URL";
 }
 

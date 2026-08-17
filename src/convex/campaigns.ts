@@ -12,13 +12,17 @@ import {
   CAMPAIGN_STATUSES,
   type CampaignStatus,
 } from "../shared/domain";
-import { discoveryReadiness } from "../shared/discovery";
+import {
+  DEFAULT_WEBSITE_TARGET,
+  discoveryReadiness,
+  type WebsiteTarget,
+} from "../shared/discovery";
 import type { Doc } from "./_generated/dataModel";
 import { mutation, query, type MutationCtx, type QueryCtx } from "./_generated/server";
 import { recordActivity } from "./lib/activity";
 import { apiError, requireUser } from "./lib/errors";
 import { log } from "./lib/log";
-import { campaignStatusValidator } from "./schema";
+import { campaignStatusValidator, websiteTargetValidator } from "./schema";
 
 function normalizeText(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
@@ -181,6 +185,7 @@ export const create = mutation({
     category: v.optional(v.string()),
     targetCount: v.optional(v.number()),
     targetKeywords: v.optional(v.string()),
+    websiteTarget: v.optional(websiteTargetValidator),
   },
   handler: async (ctx, args) => {
     const user = await requireUser(ctx);
@@ -194,6 +199,8 @@ export const create = mutation({
     const marketCode = normalizeText(args.marketCode);
     const region = normalizeText(args.region);
     await validateMarket(ctx, marketCode, region);
+    const websiteTarget: WebsiteTarget =
+      args.websiteTarget ?? DEFAULT_WEBSITE_TARGET;
     const id = await ctx.db.insert("campaigns", {
       name,
       description: normalizeText(args.description),
@@ -204,6 +211,7 @@ export const create = mutation({
       category: normalizeText(args.category),
       targetCount: normalizeTargetCount(args.targetCount),
       targetKeywords: normalizeText(args.targetKeywords),
+      websiteTarget,
       updatedAt: Date.now(),
     });
     await recordActivity(ctx, {
@@ -229,6 +237,7 @@ export const update = mutation({
     category: v.optional(v.string()),
     targetCount: v.optional(v.number()),
     targetKeywords: v.optional(v.string()),
+    websiteTarget: v.optional(websiteTargetValidator),
     status: v.optional(campaignStatusValidator),
   },
   handler: async (ctx, args) => {
@@ -244,6 +253,8 @@ export const update = mutation({
     const marketCode = normalizeText(args.marketCode);
     const region = normalizeText(args.region);
     await validateMarket(ctx, marketCode, region);
+    const websiteTarget: WebsiteTarget =
+      args.websiteTarget ?? existing.websiteTarget ?? DEFAULT_WEBSITE_TARGET;
     await ctx.db.patch(args.id, {
       name,
       description: normalizeText(args.description),
@@ -253,6 +264,7 @@ export const update = mutation({
       category: normalizeText(args.category),
       targetCount: normalizeTargetCount(args.targetCount),
       targetKeywords: normalizeText(args.targetKeywords),
+      websiteTarget,
       updatedAt: Date.now(),
     });
     if (args.status && args.status !== existing.status) {

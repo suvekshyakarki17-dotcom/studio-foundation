@@ -15,6 +15,7 @@ import {
   PROJECT_STATUSES,
   WEBSITE_STATES,
 } from "@/shared/domain";
+import { DEFAULT_WEBSITE_TARGET, WEBSITE_TARGETS } from "@/shared/discovery";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -163,6 +164,7 @@ export const campaignFormSchema = z.object({
   category: optionalText(120),
   targetCount: optionalTargetCount,
   targetKeywords: optionalText(300),
+  websiteTarget: z.enum(WEBSITE_TARGETS).default(DEFAULT_WEBSITE_TARGET),
 });
 export type CampaignFormValues = z.infer<typeof campaignFormSchema>;
 

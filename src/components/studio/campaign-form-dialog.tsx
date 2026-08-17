@@ -35,6 +35,12 @@ import {
   KNOWN_MARKETS,
   type CampaignStatus,
 } from "@/shared/domain";
+import {
+  DEFAULT_WEBSITE_TARGET,
+  WEBSITE_TARGET_LABELS,
+  WEBSITE_TARGETS,
+  type WebsiteTarget,
+} from "@/shared/discovery";
 
 interface CampaignFormDialogProps {
   open: boolean;
@@ -56,6 +62,9 @@ export function CampaignFormDialog({
   const [marketCode, setMarketCode] = useState("");
   const [region, setRegion] = useState("");
   const [status, setStatus] = useState<CampaignStatus>("DRAFT");
+  const [websiteTarget, setWebsiteTarget] = useState<WebsiteTarget>(
+    DEFAULT_WEBSITE_TARGET,
+  );
 
   // Reset the form whenever the dialog opens (create or a different edit).
   useEffect(() => {
@@ -63,6 +72,7 @@ export function CampaignFormDialog({
     setMarketCode(campaign?.marketCode ?? "");
     setRegion(campaign?.region ?? "");
     setStatus(campaign?.status ?? "DRAFT");
+    setWebsiteTarget(campaign?.websiteTarget ?? DEFAULT_WEBSITE_TARGET);
     setError(null);
   }, [open, campaign]);
 
@@ -88,6 +98,7 @@ export function CampaignFormDialog({
       category: data.get("category"),
       targetCount: data.get("targetCount"),
       targetKeywords: data.get("targetKeywords"),
+      websiteTarget,
     };
     const parsed = (isEdit ? campaignEditSchema : campaignFormSchema).safeParse({
       ...fields,
@@ -111,6 +122,7 @@ export function CampaignFormDialog({
           category: parsed.data.category,
           targetCount: parsed.data.targetCount,
           targetKeywords: parsed.data.targetKeywords,
+          websiteTarget: parsed.data.websiteTarget,
           status,
         });
         toast(`Campaign updated — ${parsed.data.name}`);
@@ -124,6 +136,7 @@ export function CampaignFormDialog({
           category: parsed.data.category,
           targetCount: parsed.data.targetCount,
           targetKeywords: parsed.data.targetKeywords,
+          websiteTarget: parsed.data.websiteTarget,
         });
         toast(`Campaign created — ${parsed.data.name}`);
       }
@@ -244,6 +257,29 @@ export function CampaignFormDialog({
               How many businesses the discovery engine should aim for. Together
               with market, region, location, and category, this makes the
               campaign ready to start discovery.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            <Label>Website target</Label>
+            <Select
+              value={websiteTarget}
+              onValueChange={(value) => setWebsiteTarget(value as WebsiteTarget)}
+            >
+              <SelectTrigger aria-label="Website target">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WEBSITE_TARGETS.map((target) => (
+                  <SelectItem key={target} value={target}>
+                    {WEBSITE_TARGET_LABELS[target]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs leading-5 text-muted-foreground">
+              No website only: only businesses positively confirmed to have no
+              official website qualify (the strict default). Any website state:
+              every discovered business qualifies regardless of its site.
             </p>
           </div>
           <div className="space-y-1.5">

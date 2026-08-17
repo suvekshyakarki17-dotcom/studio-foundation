@@ -3,6 +3,7 @@ import {
   DISCOVERY_PROVIDERS,
   canRunTransition,
   discoveryReadiness,
+  qualifyLead,
   type DiscoveryRawRecord,
 } from "./discovery";
 import { findDuplicate, toBusinessIdentity } from "./discovery/dedupe";
@@ -11,6 +12,7 @@ import {
   buildIdentityKeys,
   canonicalizeUrl,
   deriveWebsiteReachability,
+  isDirectoryDomain,
   normalizeEmail,
   normalizeName,
   normalizePhone,
@@ -61,6 +63,24 @@ describe("canonicalizeUrl", () => {
     expect(canonicalizeUrl("not a url")).toBeNull();
     expect(canonicalizeUrl("mailto:hi@example.com")).toBeNull();
     expect(canonicalizeUrl("")).toBeNull();
+  });
+});
+
+/* ------------------------------ Directories ------------------------------ */
+
+describe("isDirectoryDomain", () => {
+  it("flags known directory and aggregator domains", () => {
+    expect(isDirectoryDomain("yelp.com")).toBe(true);
+    expect(isDirectoryDomain("www.yelp.com")).toBe(true);
+    expect(isDirectoryDomain("m.tripadvisor.co.uk")).toBe(true);
+    expect(isDirectoryDomain("facebook.com")).toBe(true);
+    expect(isDirectoryDomain("www.opentable.com")).toBe(true);
+  });
+
+  it("never flags a business's own domain", () => {
+    expect(isDirectoryDomain("joespizza.com")).toBe(false);
+    expect(isDirectoryDomain("cajunqueen.com")).toBe(false);
+    expect(isDirectoryDomain("thefigtreecharlotte.com")).toBe(false);
   });
 });
 
@@ -130,10 +150,10 @@ describe("normalizeRecord", () => {
     expect(normalized.confidence).toBe(1);
   });
 
-  it("marks a missing website as NO_WEBSITE", () => {
+  it("marks a missing website as UNKNOWN — never claims absence", () => {
     expect(
       normalizeRecord({ company: "Corner Shop" }, 1).websiteStatus,
-    ).toBe("NO_WEBSITE");
+    ).toBe("UNKNOWN");
   });
 
   it("marks an unusable website as INVALID_URL", () => {
@@ -163,10 +183,42 @@ describe("normalizeRecord", () => {
 });
 
 describe("deriveWebsiteReachability", () => {
-  it("never claims reachability from presence alone", () => {
-    expect(deriveWebsiteReachability(undefined)).toBe("NO_WEBSITE");
+  it("never claims absence from a missing field", () => {
+    expect(deriveWebsiteReachability(undefined)).toBe("UNKNOWN");
     expect(deriveWebsiteReachability("example.com")).toBe("UNKNOWN");
     expect(deriveWebsiteReachability("bad url")).toBe("INVALID_URL");
+  });
+});
+
+/* --------------------------- Qualification gate --------------------------- */
+
+describe("qualifyLead", () => {
+  it("qualifies only positively confirmed NO_WEBSITE under the strict target", () => {
+    expect(qualifyLead("NO_WEBSITE", "NO_WEBSITE_ONLY").qualification).toBe(
+      "QUALIFIED",
+    );
+    expect(
+      qualifyLead("HAS_WEBSITE", "NO_WEBSITE_ONLY").qualification,
+    ).toBe("REJECTED_HAS_WEBSITE");
+  });
+
+  it("never qualifies UNKNOWN or UNREACHABLE as no-website", () => {
+    for (const status of [
+      "UNKNOWN",
+      "UNREACHABLE",
+      "BLOCKED",
+      "INVALID_URL",
+      "CHECK_FAILED",
+    ] as const) {
+      expect(qualifyLead(status, "NO_WEBSITE_ONLY").qualification).toBe(
+        "NOT_QUALIFIED",
+      );
+    }
+  });
+
+  it("qualifies everything when the campaign targets any website state", () => {
+    expect(qualifyLead("HAS_WEBSITE", "ANY").qualification).toBe("QUALIFIED");
+    expect(qualifyLead("UNKNOWN", "ANY").qualification).toBe("QUALIFIED");
   });
 });
 

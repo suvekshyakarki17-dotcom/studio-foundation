@@ -93,6 +93,175 @@ export function buildLocalSearchPayload(
   };
 }
 
+/* ---------------------- Official-website resolution ----------------------- */
+
+/** A business whose official website needs to be resolved by a real search. */
+export interface WebsiteResolutionTarget {
+  name: string;
+  city?: string;
+  region?: string;
+  category?: string;
+}
+
+/**
+ * One business's resolution result from the verification search. `found`
+ * means the business was located in public sources at all; `hasWebsite`
+ * means a credible official website owned by the business was found.
+ * Directory pages and social profiles are never official websites.
+ */
+export interface WebsiteResolutionItem {
+  name: string;
+  found: boolean;
+  hasWebsite: boolean;
+  website?: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  googleMapsUrl?: string;
+  instagram?: string;
+  facebook?: string;
+  tiktok?: string;
+  linkedin?: string;
+  details?: string;
+}
+
+export interface WebsiteResolutionMapping {
+  items: WebsiteResolutionItem[];
+  /** Entries found in the payload but dropped (no usable name). */
+  unmappable: number;
+  /** Total business entries found in the payload before mapping. */
+  returned: number;
+}
+
+/**
+ * Build the /search payload for a batched official-website resolution.
+ * One request covers every pending business (numResults 1 — the answer is
+ * in the LLM extraction, not the result pages), which keeps cost and rate
+ * limits proportional to runs rather than businesses.
+ */
+export function buildWebsiteResolutionPayload(input: {
+  businesses: WebsiteResolutionTarget[];
+  country?: string;
+}): ScrapegraphaiSearchPayload {
+  const targets = input.businesses.map(
+    (business) =>
+      `${business.name}${business.city ? `, ${business.city}` : ""}${
+        business.region ? `, ${business.region}` : ""
+      }`,
+  );
+  return {
+    query: `Official website lookup for: ${targets.join(" | ")}`,
+    numResults: 1,
+    country: (input.country ?? "us").toLowerCase().slice(0, 2),
+    prompt: `For EACH business in the list, search the web and determine two things: (1) whether the business was actually found in public sources, and (2) whether it has an OFFICIAL WEBSITE owned by the business. An official website is a site the business itself operates (typically its own domain). Directory pages (Yelp, TripAdvisor, Yellow Pages, OpenTable, Google Maps), social profiles (Facebook, Instagram, TikTok, LinkedIn), and aggregator pages are NEVER official websites. Only set hasWebsite=true when you find a credible official website owned by the business. If the business exists publicly but has no official website, return found=true and hasWebsite=false. If the business cannot be found in public sources at all, return found=false and hasWebsite=false. Never invent contact details or profiles — only return values you actually found. Return exactly one entry per business from the list, using the exact name provided.`,
+    schema: {
+      type: "object",
+      properties: {
+        businesses: {
+          type: "array",
+          description: "One entry per input business, using the exact input name",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string", description: "Exact business name from the list" },
+              found: {
+                type: "boolean",
+                description: "Whether the business was found in public sources",
+              },
+              hasWebsite: {
+                type: "boolean",
+                description: "Whether an official website owned by the business exists",
+              },
+              website: {
+                type: "string",
+                description: "Official website URL, only when hasWebsite is true",
+              },
+              phone: { type: "string", description: "Publicly listed phone number, if found" },
+              email: { type: "string", description: "Publicly listed email address, if found" },
+              address: { type: "string", description: "Publicly listed street address, if found" },
+              googleMapsUrl: {
+                type: "string",
+                description: "Google Maps / business profile URL, if found",
+              },
+              instagram: { type: "string", description: "Instagram profile URL, if found" },
+              facebook: { type: "string", description: "Facebook page URL, if found" },
+              tiktok: { type: "string", description: "TikTok profile URL, if found" },
+              linkedin: { type: "string", description: "LinkedIn page URL, if found" },
+              details: {
+                type: "string",
+                description: "Short evidence note (e.g. which sources were checked)",
+              },
+            },
+            required: ["name", "found", "hasWebsite"],
+          },
+        },
+      },
+      required: ["businesses"],
+    },
+  };
+}
+
+/** Coerce an unknown boolean-ish extraction value. */
+function asBoolean(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    if (["true", "yes", "1", "y"].includes(trimmed)) return true;
+    if (["false", "no", "0", "n", ""].includes(trimmed)) return false;
+  }
+  if (typeof value === "number") return value !== 0;
+  return false;
+}
+
+/**
+ * Map the /search response onto per-business resolution items. Keeps only
+ * entries with a usable name, coerces the boolean flags defensively, and
+ * only trusts a website when hasWebsite is true (a site on a page that was
+ * not judged official is dropped rather than guessed).
+ */
+export function mapWebsiteResolutionResponse(
+  data: unknown,
+): WebsiteResolutionMapping {
+  const items = extractBusinessItems(data);
+  const resolutions: WebsiteResolutionItem[] = [];
+  let unmappable = 0;
+
+  for (const item of items) {
+    if (!item || typeof item !== "object") {
+      unmappable += 1;
+      continue;
+    }
+    const obj = item as Record<string, unknown>;
+    const name = asString(obj.name) ?? asString(obj.businessName);
+    if (!name) {
+      unmappable += 1;
+      continue;
+    }
+    const found = asBoolean(obj.found);
+    const hasWebsite = asBoolean(obj.hasWebsite);
+    const website = hasWebsite ? asString(obj.website) : undefined;
+    resolutions.push({
+      name,
+      found,
+      hasWebsite,
+      website,
+      phone: asString(obj.phone),
+      email: asString(obj.email),
+      address: asString(obj.address),
+      googleMapsUrl: asString(obj.googleMapsUrl) ?? asString(obj.google_maps_url),
+      instagram: asString(obj.instagram),
+      facebook: asString(obj.facebook),
+      tiktok: asString(obj.tiktok),
+      linkedin: asString(obj.linkedin),
+      details: asString(obj.details) ?? asString(obj.notes),
+    });
+  }
+
+  return { items: resolutions, unmappable, returned: items.length };
+}
+
+/* --------------------------- Record mapping ------------------------------ */
+
 /** Fallback fields the campaign config supplies when extraction omits them. */
 export interface ScrapegraphaiRecordFallback {
   city?: string;

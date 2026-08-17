@@ -21,6 +21,7 @@
 import { v } from "convex/values";
 import { CAMPAIGN_STATUS_LABELS, HIGH_PRIORITY_SCORE } from "../shared/domain";
 import {
+  DEFAULT_WEBSITE_TARGET,
   DISCOVERY_ERROR_LABELS,
   DISCOVERY_PROVIDERS,
   DISCOVERY_RUN_STATUS_LABELS,
@@ -28,16 +29,25 @@ import {
   WEBSITE_REACHABILITY_LABELS,
   canRunTransition,
   discoveryReadiness,
+  qualifyLead,
   type DiscoveryNormalizedRecord,
   type DiscoveryRunStatus,
   type DiscoveryRawRecord,
   type DuplicateSignal,
   type WebsiteReachabilityState,
+  type WebsiteTarget,
 } from "../shared/discovery";
 import type { BusinessIdentity } from "../shared/discovery/dedupe";
 import { findDuplicate, toBusinessIdentity } from "../shared/discovery/dedupe";
 import { enrichmentUpdates, type EnrichmentUpdates } from "../shared/discovery/enrich";
-import { normalizeRecord } from "../shared/discovery/normalize";
+import {
+  canonicalizeUrl,
+  isDirectoryDomain,
+  normalizeEmail,
+  normalizeName,
+  normalizePhone,
+  normalizeRecord,
+} from "../shared/discovery/normalize";
 import {
   scoreNormalizedRecord,
   scoreOpportunity,
@@ -61,7 +71,9 @@ import {
   discoveryRawRecordValidator,
   discoveryResultStatusValidator,
   discoveryRunStatusValidator,
+  leadQualificationValidator,
   websiteReachabilityValidator,
+  websiteTargetValidator,
 } from "./schema";
 
 const MAX_BATCH_RECORDS = 200;
@@ -108,6 +120,48 @@ function opportunityFromBusiness(
     hasCategory: Boolean(business.category),
   });
   return { score: assessment.score, factors: assessment.factors, scoredAt };
+}
+
+/**
+ * The website target a business was discovered under: the run's snapshot
+ * first, then the campaign's, then the strict default. Runs started before
+ * the target existed (or businesses created outside discovery) fall back
+ * honestly to NO_WEBSITE_ONLY.
+ */
+async function websiteTargetForBusiness(
+  ctx: MutationCtx,
+  business: Doc<"businesses">,
+): Promise<WebsiteTarget> {
+  if (business.discoveryRunId) {
+    const run = await ctx.db.get(business.discoveryRunId);
+    if (run?.websiteTarget) return run.websiteTarget;
+  }
+  if (business.campaignId) {
+    const campaign = await ctx.db.get(business.campaignId);
+    if (campaign?.websiteTarget) return campaign.websiteTarget;
+  }
+  return DEFAULT_WEBSITE_TARGET;
+}
+
+/** Mirror a business's qualification onto its discovery result rows. */
+async function patchResultQualification(
+  ctx: MutationCtx,
+  business: Pick<
+    Doc<"businesses">,
+    "_id" | "discoveryRunId" | "qualification" | "qualificationReason"
+  >,
+): Promise<void> {
+  if (!business.discoveryRunId) return;
+  const rows = await ctx.db
+    .query("discoveryResults")
+    .withIndex("by_business", (q) => q.eq("businessId", business._id))
+    .collect();
+  for (const row of rows) {
+    await ctx.db.patch(row._id, {
+      qualification: business.qualification,
+      qualificationReason: business.qualificationReason,
+    });
+  }
 }
 
 /* --------------------------------- Queries -------------------------------- */
@@ -211,6 +265,10 @@ export const resultsList = query({
   args: {
     runId: v.id("discoveryRuns"),
     status: v.optional(discoveryResultStatusValidator),
+    /** PENDING = accepted rows whose verification has not run yet. */
+    qualification: v.optional(
+      v.union(leadQualificationValidator, v.literal("PENDING")),
+    ),
     sort: v.optional(
       v.union(
         v.literal("newest"),
@@ -221,16 +279,19 @@ export const resultsList = query({
       ),
     ),
   },
-  handler: async (ctx, { runId, status, sort }) => {
+  handler: async (ctx, { runId, status, qualification, sort }) => {
     await requireUser(ctx);
     const rows = await ctx.db
       .query("discoveryResults")
       .withIndex("by_run", (q) => q.eq("runId", runId))
       .order("desc")
       .take(RESULTS_LIMIT);
-    const filtered = status
-      ? rows.filter((row) => row.status === status)
-      : rows;
+    let filtered = status ? rows.filter((row) => row.status === status) : rows;
+    if (qualification === "PENDING") {
+      filtered = filtered.filter((row) => row.qualification === undefined);
+    } else if (qualification) {
+      filtered = filtered.filter((row) => row.qualification === qualification);
+    }
 
     const mode = sort ?? "newest";
     const sorted = [...filtered].sort((a, b) => {
@@ -712,6 +773,8 @@ export const start = mutation({
       rejectedCount: 0,
       failedCount: 0,
       processedCount: 0,
+      qualifiedCount: 0,
+      websiteTarget: campaign.websiteTarget ?? DEFAULT_WEBSITE_TARGET,
       errorCode: configured ? undefined : "PROVIDER_NOT_CONFIGURED",
       errorMessage: configured
         ? undefined
@@ -1079,8 +1142,32 @@ export const finalizeRun = internalMutation({
     const finalStatus: DiscoveryRunStatus =
       run.failedCount > 0 ? "PARTIAL" : "COMPLETED";
     const now = Date.now();
+
+    // The qualified count is derived from real gate outcomes on the run's
+    // accepted businesses — never an estimate.
+    const acceptedRows = await ctx.db
+      .query("discoveryResults")
+      .withIndex("by_run", (q) => q.eq("runId", runId))
+      .collect();
+    const businessIds = [
+      ...new Set(
+        acceptedRows
+          .filter(
+            (row) => row.status === "ACCEPTED" && row.businessId !== undefined,
+          )
+          .map((row) => row.businessId as Id<"businesses">),
+      ),
+    ];
+    const businesses = (
+      await Promise.all(businessIds.map((id) => ctx.db.get(id)))
+    ).filter((business): business is Doc<"businesses"> => business !== null);
+    const qualifiedCount = businesses.filter(
+      (business) => business.qualification === "QUALIFIED",
+    ).length;
+
     await ctx.db.patch(runId, {
       status: finalStatus,
+      qualifiedCount,
       completedAt: now,
       updatedAt: now,
     });
@@ -1092,7 +1179,9 @@ export const finalizeRun = internalMutation({
           ? `Discovery partially completed — ${run.failedCount} failed record${
               run.failedCount === 1 ? "" : "s"
             }`
-          : `Discovery completed — ${run.acceptedCount} accepted, ${run.duplicateCount} duplicate${
+          : `Discovery completed — ${run.acceptedCount} accepted, ${qualifiedCount} qualified${
+              qualifiedCount === 1 ? " lead" : " leads"
+            }, ${run.duplicateCount} duplicate${
               run.duplicateCount === 1 ? "" : "s"
             }, ${run.rejectedCount} rejected`,
       actorId,
@@ -1100,7 +1189,11 @@ export const finalizeRun = internalMutation({
       entityId: runId,
     });
     await syncCampaignStatus(ctx, run.campaignId, actorId);
-    log("info", "discovery.finalized", { runId, status: finalStatus });
+    log("info", "discovery.finalized", {
+      runId,
+      status: finalStatus,
+      qualifiedCount,
+    });
     return { status: finalStatus };
   },
 });
@@ -1132,9 +1225,12 @@ export const createSmokeRun = internalMutation({
     targetCount: v.number(),
     providerSlug: v.string(),
     providerName: v.string(),
+    websiteTarget: v.optional(websiteTargetValidator),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const websiteTarget: WebsiteTarget =
+      args.websiteTarget ?? DEFAULT_WEBSITE_TARGET;
     const campaignId = await ctx.db.insert("campaigns", {
       name: args.name,
       description: args.description,
@@ -1144,6 +1240,7 @@ export const createSmokeRun = internalMutation({
       city: args.city,
       category: args.category,
       targetCount: args.targetCount,
+      websiteTarget,
       updatedAt: now,
     });
     const runId = await ctx.db.insert("discoveryRuns", {
@@ -1162,6 +1259,8 @@ export const createSmokeRun = internalMutation({
       rejectedCount: 0,
       failedCount: 0,
       processedCount: 0,
+      qualifiedCount: 0,
+      websiteTarget,
       errorCode: undefined,
       errorMessage: undefined,
       cancelledReason: undefined,
@@ -1497,17 +1596,211 @@ export const setWebsiteCheck = internalMutation({
     });
     const business = await ctx.db.get(args.businessId);
     if (business) {
+      // Strict qualification gate: only positive evidence qualifies.
+      const target = await websiteTargetForBusiness(ctx, business);
+      const gate = qualifyLead(args.websiteStatus, target);
       await ctx.db.patch(args.businessId, {
         opportunity: opportunityFromBusiness(business, args.websiteCheckedAt),
+        qualification: gate.qualification,
+        qualificationReason: gate.reason,
+        qualifiedAt:
+          gate.qualification === "QUALIFIED" ? args.websiteCheckedAt : undefined,
+      });
+      await patchResultQualification(ctx, {
+        _id: business._id,
+        discoveryRunId: business.discoveryRunId,
+        qualification: gate.qualification,
+        qualificationReason: gate.reason,
       });
     }
     await recordActivity(ctx, {
       type: "DISCOVERY_WEBSITE_CHECKED",
       description: `Website status for ${business?.company ?? "business"}: ${
         WEBSITE_REACHABILITY_LABELS[args.websiteStatus]
-      }${args.websiteHttpStatus ? ` (HTTP ${args.websiteHttpStatus})` : ""}`,
+      }${args.websiteHttpStatus ? ` (HTTP ${args.websiteHttpStatus})` : ""}${
+        business?.qualification === "QUALIFIED"
+          ? " — qualified no-website lead"
+          : business?.qualification === "REJECTED_HAS_WEBSITE"
+            ? " — rejected (has website)"
+            : ""
+      }`,
       entityType: "business",
       entityId: args.businessId,
+    });
+  },
+});
+
+/** Append real public profile URLs that are not already recorded. */
+function mergeSocialUrls(
+  existing: string[] | undefined,
+  found: string[] | undefined,
+): string[] | undefined {
+  if (!found || found.length === 0) return existing;
+  const seen = new Set(existing ?? []);
+  for (const url of found) {
+    if (url && !seen.has(url)) seen.add(url);
+  }
+  return [...seen];
+}
+
+/**
+ * Internal write: persist a website found by the official-website
+ * resolution step. The site is stored, then the execution action runs a
+ * real reachability check on it (which drives the qualification gate).
+ */
+export const applyResolvedWebsite = internalMutation({
+  args: {
+    businessId: v.id("businesses"),
+    website: v.string(),
+    sourceReference: v.optional(v.string()),
+  },
+  handler: async (ctx, { businessId, website, sourceReference }) => {
+    const business = await ctx.db.get(businessId);
+    if (!business) {
+      throw apiError("NOT_FOUND", "This business no longer exists.");
+    }
+    const canonical = canonicalizeUrl(website);
+    if (!canonical) {
+      // An unusable candidate is not evidence of anything — stay UNKNOWN.
+      const target = await websiteTargetForBusiness(ctx, business);
+      const gate = qualifyLead("UNKNOWN", target);
+      const now = Date.now();
+      await ctx.db.patch(businessId, {
+        qualification: gate.qualification,
+        qualificationReason:
+          "The verification search reported a website but its URL was unusable — status left unknown.",
+        updatedAt: now,
+      });
+      await patchResultQualification(ctx, {
+        _id: business._id,
+        discoveryRunId: business.discoveryRunId,
+        qualification: gate.qualification,
+        qualificationReason: gate.reason,
+      });
+      return;
+    }
+    await ctx.db.patch(businessId, {
+      website: canonical.url,
+      sourceReference: sourceReference ?? business.sourceReference,
+      updatedAt: Date.now(),
+    });
+    log("info", "discovery.website_resolved", {
+      businessId,
+      website: canonical.url,
+    });
+  },
+});
+
+/**
+ * Internal write: positively confirm a business has no official website
+ * after a real verification search. This is the ONLY path that may set
+ * NO_WEBSITE on a discovered business. Enrichment fills only empty fields
+ * with values the verification search actually found — never fabricated.
+ */
+export const applyConfirmedNoWebsite = internalMutation({
+  args: {
+    businessId: v.id("businesses"),
+    sourceReference: v.optional(v.string()),
+    details: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    email: v.optional(v.string()),
+    address: v.optional(v.string()),
+    googleMapsUrl: v.optional(v.string()),
+    socials: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args) => {
+    const business = await ctx.db.get(args.businessId);
+    if (!business) {
+      throw apiError("NOT_FOUND", "This business no longer exists.");
+    }
+    const now = Date.now();
+    const target = await websiteTargetForBusiness(ctx, business);
+    const gate = qualifyLead("NO_WEBSITE", target);
+    const reason =
+      gate.reason + (args.details ? ` ${args.details.trim()}` : "");
+    // A previously recorded directory/aggregator URL is not an official
+    // website — clear it so the record honestly shows no website.
+    const existingCanonical = business.website
+      ? canonicalizeUrl(business.website)
+      : null;
+    const website =
+      existingCanonical && isDirectoryDomain(existingCanonical.domain)
+        ? undefined
+        : business.website;
+    await ctx.db.patch(args.businessId, {
+      websiteStatus: "NO_WEBSITE",
+      websiteState: "NONE",
+      website,
+      websiteCheckedAt: now,
+      qualification: gate.qualification,
+      qualificationReason: reason,
+      qualifiedAt: gate.qualification === "QUALIFIED" ? now : undefined,
+      // Enrichment: fill only empty fields with real found values.
+      phone: args.phone && !business.phone ? normalizePhone(args.phone) : business.phone,
+      email: args.email && !business.email ? normalizeEmail(args.email) : business.email,
+      address:
+        args.address && !business.address
+          ? normalizeName(args.address)
+          : business.address,
+      googleMapsUrl:
+        args.googleMapsUrl && !business.googleMapsUrl
+          ? normalizeName(args.googleMapsUrl)
+          : business.googleMapsUrl,
+      socials: mergeSocialUrls(business.socials, args.socials),
+      sourceReference: args.sourceReference ?? business.sourceReference,
+      updatedAt: now,
+    });
+    const updated = await ctx.db.get(args.businessId);
+    if (updated) {
+      await ctx.db.patch(args.businessId, {
+        opportunity: opportunityFromBusiness(updated, now),
+      });
+      await patchResultQualification(ctx, updated);
+    }
+    await recordActivity(ctx, {
+      type: "DISCOVERY_WEBSITE_CHECKED",
+      description: `Website status for ${business.company}: No website — confirmed by a real verification search${gate.qualification === "QUALIFIED" ? " · qualified no-website lead" : ""}`,
+      entityType: "business",
+      entityId: args.businessId,
+    });
+    log("info", "discovery.no_website_confirmed", {
+      businessId: args.businessId,
+      qualification: gate.qualification,
+    });
+  },
+});
+
+/**
+ * Internal write: verification could not confirm anything (business not
+ * found, search failed, or no usable URL). The business stays UNKNOWN and
+ * is explicitly marked NOT_QUALIFIED — absence was never verified.
+ */
+export const applyWebsiteUnverified = internalMutation({
+  args: {
+    businessId: v.id("businesses"),
+    reason: v.string(),
+  },
+  handler: async (ctx, { businessId, reason }) => {
+    const business = await ctx.db.get(businessId);
+    if (!business) {
+      throw apiError("NOT_FOUND", "This business no longer exists.");
+    }
+    const target = await websiteTargetForBusiness(ctx, business);
+    const gate = qualifyLead("UNKNOWN", target);
+    const fullReason = `${gate.reason} ${reason.trim()}`.trim();
+    const now = Date.now();
+    await ctx.db.patch(businessId, {
+      qualification: gate.qualification,
+      qualificationReason: fullReason,
+      qualifiedAt:
+        gate.qualification === "QUALIFIED" ? now : undefined,
+      updatedAt: now,
+    });
+    await patchResultQualification(ctx, {
+      _id: business._id,
+      discoveryRunId: business.discoveryRunId,
+      qualification: gate.qualification,
+      qualificationReason: fullReason,
     });
   },
 });
@@ -1582,7 +1875,9 @@ export const getRunBusinessesPendingWebsiteCheck = internalQuery({
       await Promise.all(businessIds.map((id) => ctx.db.get(id)))
     ).filter(
       (business): business is Doc<"businesses"> =>
-        business !== null && business.websiteStatus === "UNKNOWN",
+        business !== null &&
+        (business.websiteStatus === "UNKNOWN" ||
+          business.websiteStatus === "INVALID_URL"),
     );
     return businesses.slice(0, limit);
   },

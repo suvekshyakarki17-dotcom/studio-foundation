@@ -64,15 +64,21 @@ import {
   DISCOVERY_RUN_STATUS_LABELS,
   DISCOVERY_RUN_STATUS_TONES,
   DUPLICATE_SIGNAL_LABELS,
+  LEAD_QUALIFICATION_LABELS,
+  LEAD_QUALIFICATION_TONES,
   WEBSITE_REACHABILITY_LABELS,
   WEBSITE_REACHABILITY_TONES,
   type DiscoveryProviderDefinition,
   type DiscoveryResultStatus,
   type DiscoveryRunStatus,
+  type LeadQualification,
   type WebsiteReachabilityState,
 } from "@/shared/discovery";
 
 const ALL = "ALL";
+
+/** Accepted-but-unverified rows show as PENDING in the qualification filter. */
+type QualificationFilter = LeadQualification | "PENDING" | typeof ALL;
 
 type ResultsSort = "newest" | "oldest" | "name" | "location" | "confidence";
 
@@ -145,6 +151,8 @@ function DiscoveryContent() {
   const [resultsStatus, setResultsStatus] = useState<
     DiscoveryResultStatus | typeof ALL
   >(ALL);
+  const [resultsQualification, setResultsQualification] =
+    useState<QualificationFilter>(ALL);
   const [resultsSort, setResultsSort] = useState<ResultsSort>("newest");
   const results = useQuery(
     api.discovery.resultsList,
@@ -152,6 +160,9 @@ function DiscoveryContent() {
       ? {
           runId: selectedRun._id,
           ...(resultsStatus === ALL ? {} : { status: resultsStatus }),
+          ...(resultsQualification === ALL
+            ? {}
+            : { qualification: resultsQualification }),
           sort: resultsSort,
         }
       : "skip",
@@ -230,6 +241,8 @@ function DiscoveryContent() {
             onClose={() => setSearchParams({})}
             resultsStatus={resultsStatus}
             onResultsStatusChange={setResultsStatus}
+            resultsQualification={resultsQualification}
+            onResultsQualificationChange={setResultsQualification}
             resultsSort={resultsSort}
             onResultsSortChange={setResultsSort}
           />
@@ -639,6 +652,10 @@ interface RunDetailProps {
   onClose: () => void;
   resultsStatus: DiscoveryResultStatus | typeof ALL;
   onResultsStatusChange: (status: DiscoveryResultStatus | typeof ALL) => void;
+  resultsQualification: QualificationFilter;
+  onResultsQualificationChange: (
+    qualification: QualificationFilter,
+  ) => void;
   resultsSort: ResultsSort;
   onResultsSortChange: (sort: ResultsSort) => void;
 }
@@ -650,13 +667,15 @@ function RunDetail({
   onClose,
   resultsStatus,
   onResultsStatusChange,
+  resultsQualification,
+  onResultsQualificationChange,
   resultsSort,
   onResultsSortChange,
 }: RunDetailProps) {
   const finishRun = useMutation(api.discovery.finish);
   const cancelRun = useMutation(api.discovery.cancel);
   const retryFailed = useMutation(api.discovery.retryFailedRecords);
-  const checkWebsitesBatch = useAction(api.discovery.checkWebsitesBatch);
+  const verifyWebsites = useAction(api.scrapegraphai.verifyWebsites);
   const executeRun = useAction(api.scrapegraphai.executeRun);
   const [busy, setBusy] = useState(false);
   const [retrying, setRetrying] = useState(false);
@@ -701,11 +720,11 @@ function RunDetail({
     }
   };
 
-  const handleCheckBatch = async () => {
+  const handleVerifyBatch = async () => {
     setCheckingBatch(true);
     try {
-      const result = await checkWebsitesBatch({ runId: run._id });
-      const parts = Object.entries(result.results)
+      const result = await verifyWebsites({ runId: run._id });
+      const parts = Object.entries(result.reachability)
         .filter(([, count]) => count > 0)
         .map(
           ([status, count]) =>
@@ -713,10 +732,20 @@ function RunDetail({
               status as WebsiteReachabilityState
             ].toLowerCase()}`,
         );
+      const qualified =
+        result.resolution.confirmedNoWebsite +
+        Object.entries(result.reachability).reduce((sum, [status, count]) => {
+          return (
+            sum +
+            (status === "NO_WEBSITE" ? count : 0)
+          );
+        }, 0);
       toast(
-        `Checked ${result.checked} website${result.checked === 1 ? "" : "s"} — ${
-          parts.length > 0 ? parts.join(", ") : "nothing to check"
-        }`,
+        `Verified ${result.checked} business${result.checked === 1 ? "" : "s"} — ${qualified} qualified${
+          result.resolution.confirmedNoWebsite > 0
+            ? `, ${result.resolution.confirmedNoWebsite} confirmed no-website by search`
+            : ""
+        }${parts.length > 0 ? ` · ${parts.join(", ")}` : ""}`,
       );
     } catch (error) {
       toast.error(getErrorMessage(error));
@@ -796,6 +825,11 @@ function RunDetail({
               {run.region ? ` · ${run.region}` : ""}
               {run.city ? ` · ${run.city}` : ""}
               {run.category ? ` · ${run.category}` : ""}
+              {run.websiteTarget === "NO_WEBSITE_ONLY"
+                ? " · no-website only"
+                : run.websiteTarget === "ANY"
+                  ? " · any website state"
+                  : ""}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -821,16 +855,16 @@ function RunDetail({
                 type="button"
                 variant="outline"
                 size="sm"
-                onClick={() => void handleCheckBatch()}
+                onClick={() => void handleVerifyBatch()}
                 disabled={checkingBatch}
-                title="Run real reachability checks on every accepted business whose website was never verified"
+                title="Real verification: reachability checks for recorded URLs, official-website resolution search for businesses without one, then the strict no-website gate"
               >
                 {checkingBatch ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : (
                   <Radar className="size-3.5" />
                 )}
-                Check websites ({run.pendingWebsiteChecks})
+                Verify websites ({run.pendingWebsiteChecks})
               </Button>
             )}
             {canRetry && (
@@ -932,12 +966,18 @@ function RunDetail({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-6">
             <RunCount label="Discovered" value={run.discoveredCount} />
             <RunCount
               label="Accepted"
               value={run.acceptedCount}
+              tone="neutral"
+            />
+            <RunCount
+              label="Qualified"
+              value={run.qualifiedCount}
               tone="success"
+              title="Accepted businesses that passed the website-target qualification gate"
             />
             <RunCount
               label="Duplicates"
@@ -1068,6 +1108,25 @@ function RunDetail({
               </Select>
             )}
             <Select
+              value={resultsQualification}
+              onValueChange={(value) =>
+                onResultsQualificationChange(value as QualificationFilter)
+              }
+            >
+              <SelectTrigger size="sm" aria-label="Filter by qualification">
+                <SelectValue placeholder="All qualifications" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>All qualifications</SelectItem>
+                <SelectItem value="QUALIFIED">Qualified — no website</SelectItem>
+                <SelectItem value="REJECTED_HAS_WEBSITE">
+                  Rejected — has website
+                </SelectItem>
+                <SelectItem value="NOT_QUALIFIED">Not qualified</SelectItem>
+                <SelectItem value="PENDING">Pending verification</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
               value={resultsSort}
               onValueChange={(value) => onResultsSortChange(value as ResultsSort)}
             >
@@ -1107,10 +1166,12 @@ function RunCount({
   label,
   value,
   tone = "neutral",
+  title,
 }: {
   label: string;
   value: number;
   tone?: StatusTone;
+  title?: string;
 }) {
   const toneClass =
     tone === "success"
@@ -1121,7 +1182,10 @@ function RunCount({
           ? "text-red-700 dark:text-red-300"
           : "text-foreground";
   return (
-    <div className="rounded-md border border-border bg-muted/30 px-4 py-3">
+    <div
+      title={title}
+      className="rounded-md border border-border bg-muted/30 px-4 py-3"
+    >
       <p className="text-xs text-muted-foreground">{label}</p>
       <p className={`mt-1 text-2xl font-semibold tabular-nums ${toneClass}`}>
         {value}
@@ -1281,6 +1345,7 @@ function ResultsTable({ rows }: { rows: ResultRow[] }) {
               <TableHead>Location</TableHead>
               <TableHead>Category</TableHead>
               <TableHead>Website</TableHead>
+              <TableHead>Qualified</TableHead>
               <TableHead>Phone</TableHead>
               <TableHead>Email</TableHead>
               <TableHead>Score</TableHead>
@@ -1329,6 +1394,12 @@ function ResultsTable({ rows }: { rows: ResultRow[] }) {
             <p className="text-xs text-muted-foreground">
               {row.normalized?.website ?? "No website"}
             </p>
+            {row.status === "ACCEPTED" && (
+              <QualificationBadge
+                qualification={row.qualification}
+                reason={row.qualificationReason}
+              />
+            )}
           </li>
         ))}
       </ul>
@@ -1417,6 +1488,16 @@ function ResultRow({
             </p>
           )}
         </TableCell>
+        <TableCell>
+          {row.status === "ACCEPTED" ? (
+            <QualificationBadge
+              qualification={row.qualification}
+              reason={row.qualificationReason}
+            />
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </TableCell>
         <TableCell className="text-muted-foreground">
           {normalized?.phone ?? "—"}
         </TableCell>
@@ -1475,7 +1556,7 @@ function ResultRow({
       {expanded && (
         <TableRow className="hover:bg-transparent">
           <TableCell />
-          <TableCell colSpan={10} className="bg-muted/20">
+          <TableCell colSpan={11} className="bg-muted/20">
             <div className="grid grid-cols-1 gap-4 py-2 sm:grid-cols-2 lg:grid-cols-3">
               <DetailBlock
                 title="Outcome"
@@ -1483,6 +1564,11 @@ function ResultRow({
                   row.status === "ACCEPTED" && row.business
                     ? `Accepted — added to the pipeline as ${row.business.name ?? "business"}`
                     : DISCOVERY_RESULT_STATUS_LABELS[row.status],
+                  row.status === "ACCEPTED" && row.qualification
+                    ? `Qualification: ${LEAD_QUALIFICATION_LABELS[row.qualification]}${
+                        row.qualificationReason ? ` — ${row.qualificationReason}` : ""
+                      }`
+                    : undefined,
                   row.rejectionReason ?? undefined,
                   row.duplicateOfBusiness
                     ? `Duplicate of ${row.duplicateOfBusiness.name ?? "business"}${
@@ -1579,6 +1665,41 @@ function ReachabilityBadge({ status }: { status: WebsiteReachabilityState }) {
       label={WEBSITE_REACHABILITY_LABELS[status]}
       tone={WEBSITE_REACHABILITY_TONES[status]}
     />
+  );
+}
+
+/**
+ * The strict no-website gate badge shown on accepted result rows. Only
+ * QUALIFIED rows are no-website leads; the reason is always attached so
+ * the user never has to open a row to learn it actually has a website.
+ */
+function QualificationBadge({
+  qualification,
+  reason,
+}: {
+  qualification: LeadQualification | undefined;
+  reason?: string;
+}) {
+  if (qualification === undefined) {
+    return (
+      <span title="Verification has not run for this business yet">
+        <StatusBadge label="Pending verification" tone="neutral" />
+      </span>
+    );
+  }
+  const label =
+    qualification === "QUALIFIED"
+      ? "No website — verified"
+      : qualification === "REJECTED_HAS_WEBSITE"
+        ? "Has website — rejected"
+        : LEAD_QUALIFICATION_LABELS[qualification];
+  return (
+    <span title={reason ?? LEAD_QUALIFICATION_LABELS[qualification]}>
+      <StatusBadge
+        label={label}
+        tone={LEAD_QUALIFICATION_TONES[qualification]}
+      />
+    </span>
   );
 }
 

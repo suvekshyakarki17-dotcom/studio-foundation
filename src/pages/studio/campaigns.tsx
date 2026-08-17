@@ -88,6 +88,7 @@ function CampaignsContent() {
         category: campaign.category,
         targetCount: campaign.targetCount,
         targetKeywords: campaign.targetKeywords,
+        websiteTarget: campaign.websiteTarget,
         status,
       });
       toast(`Campaign moved to ${CAMPAIGN_STATUS_LABELS[status]}`);
@@ -242,6 +243,12 @@ function CampaignsContent() {
                         ready={campaign.discoveryReady}
                         missing={campaign.missingDiscoveryFields}
                       />
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        Target:{" "}
+                        {campaign.websiteTarget === "NO_WEBSITE_ONLY"
+                          ? "No website only"
+                          : "Any website state"}
+                      </p>
                       {campaign.targetKeywords && (
                         <p className="mt-0.5 max-w-[260px] truncate text-xs text-muted-foreground">
                           {campaign.targetKeywords}

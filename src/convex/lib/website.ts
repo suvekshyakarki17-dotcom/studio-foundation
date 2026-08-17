@@ -16,8 +16,11 @@ export async function performWebsiteCheck(
   websiteStatus: WebsiteReachabilityState;
   websiteHttpStatus: number | undefined;
 }> {
+  // Absence of a URL is NOT proof of absence: without a URL there is
+  // nothing to reach, so the state stays UNKNOWN until a verification
+  // search positively confirms the business has no official website.
   if (!website) {
-    return { websiteStatus: "NO_WEBSITE", websiteHttpStatus: undefined };
+    return { websiteStatus: "UNKNOWN", websiteHttpStatus: undefined };
   }
   const canonical = canonicalizeUrl(website);
   if (!canonical) {

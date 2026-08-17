@@ -118,10 +118,11 @@ describe("scoreNormalizedRecord", () => {
       1,
     );
     const assessment = scoreNormalizedRecord(normalized);
-    // NO_WEBSITE 40 + email 20 + phone 10 + city 10 + category 10
-    expect(assessment.score).toBe(90);
+    // A record without a URL is UNKNOWN at import (never claimed absent):
+    // website 20 + email 20 + phone 10 + city 10 + category 10
+    expect(assessment.score).toBe(70);
     expect(assessment.factors).toEqual({
-      website: 40,
+      website: 20,
       contact: 30,
       completeness: 20,
     });

@@ -202,6 +202,157 @@ export const WEBSITE_REACHABILITY_TONES: Record<
   CHECK_FAILED: "error",
 };
 
+/* ------------------------ Lead qualification gate -------------------------- */
+
+/**
+ * The strict qualification outcome for an accepted business under the
+ * campaign's website target.
+ *
+ * - QUALIFIED            — confirmed NO_WEBSITE (or the campaign targets ANY
+ *                          website state) → enters the qualified lead list
+ * - REJECTED_HAS_WEBSITE — a reachable official website was confirmed →
+ *                          excluded from no-website leads
+ * - NOT_QUALIFIED        — UNKNOWN / UNREACHABLE / BLOCKED / INVALID_URL /
+ *                          CHECK_FAILED — absence was never positively
+ *                          verified → excluded from no-website leads
+ */
+export const LEAD_QUALIFICATIONS = [
+  "QUALIFIED",
+  "REJECTED_HAS_WEBSITE",
+  "NOT_QUALIFIED",
+] as const;
+export type LeadQualification = (typeof LEAD_QUALIFICATIONS)[number];
+
+export const LEAD_QUALIFICATION_LABELS: Record<LeadQualification, string> = {
+  QUALIFIED: "Qualified — no website",
+  REJECTED_HAS_WEBSITE: "Rejected — has website",
+  NOT_QUALIFIED: "Not qualified",
+};
+
+export const LEAD_QUALIFICATION_TONES: Record<LeadQualification, StatusTone> = {
+  QUALIFIED: "success",
+  REJECTED_HAS_WEBSITE: "error",
+  NOT_QUALIFIED: "neutral",
+};
+
+/* ------------------------------ Website target ---------------------------- */
+
+/**
+ * What a campaign's discovery engine should qualify. The default for the
+ * agency is NO_WEBSITE_ONLY: only businesses positively confirmed to have
+ * no official website enter the qualified lead list. ANY qualifies every
+ * accepted business regardless of website state (used for lead lists the
+ * operator explicitly wants in full).
+ */
+export const WEBSITE_TARGETS = ["NO_WEBSITE_ONLY", "ANY"] as const;
+export type WebsiteTarget = (typeof WEBSITE_TARGETS)[number];
+
+export const WEBSITE_TARGET_LABELS: Record<WebsiteTarget, string> = {
+  NO_WEBSITE_ONLY: "No website only",
+  ANY: "Any website state",
+};
+
+export const DEFAULT_WEBSITE_TARGET: WebsiteTarget = "NO_WEBSITE_ONLY";
+
+/**
+ * The strict no-website qualification gate. Only positive evidence qualifies:
+ *
+ *   CONFIRMED_NO_WEBSITE → QUALIFIED
+ *   CONFIRMED_WEBSITE    → REJECTED_HAS_WEBSITE
+ *   UNKNOWN / UNREACHABLE / BLOCKED / INVALID_URL / CHECK_FAILED
+ *                        → NOT_QUALIFIED
+ *
+ * Never turns UNKNOWN into NO_WEBSITE and never treats an unreachable URL
+ * as proof of absence.
+ */
+export function qualifyLead(
+  websiteStatus: WebsiteReachabilityState,
+  websiteTarget: WebsiteTarget,
+): { qualification: LeadQualification; reason: string } {
+  if (websiteTarget !== DEFAULT_WEBSITE_TARGET) {
+    return {
+      qualification: "QUALIFIED",
+      reason:
+        "Campaign targets every discovered business regardless of website state.",
+    };
+  }
+  switch (websiteStatus) {
+    case "NO_WEBSITE":
+      return {
+        qualification: "QUALIFIED",
+        reason:
+          "Verified: no official business website could be found after a real verification search.",
+      };
+    case "HAS_WEBSITE":
+      return {
+        qualification: "REJECTED_HAS_WEBSITE",
+        reason: "Verified: a reachable official business website exists.",
+      };
+    case "UNREACHABLE":
+      return {
+        qualification: "NOT_QUALIFIED",
+        reason:
+          "A website URL exists but could not be reached — that is not proof the business has no website.",
+      };
+    case "BLOCKED":
+      return {
+        qualification: "NOT_QUALIFIED",
+        reason:
+          "The website check was blocked (HTTP 403/429) — the site may still exist.",
+      };
+    case "INVALID_URL":
+      return {
+        qualification: "NOT_QUALIFIED",
+        reason: "The recorded website URL is unusable — the real site is unverified.",
+      };
+    case "CHECK_FAILED":
+      return {
+        qualification: "NOT_QUALIFIED",
+        reason: "The website check failed — absence was not verified.",
+      };
+    case "UNKNOWN":
+      return {
+        qualification: "NOT_QUALIFIED",
+        reason:
+          "Unverified — no positive evidence that the business has no website.",
+      };
+  }
+}
+
+/* -------------------------- Website resolution ---------------------------- */
+
+/**
+ * Outcome of the official-website resolution step (a real verification
+ * search for businesses the provider returned without a usable URL).
+ * Only CONFIRMED_NO_WEBSITE may ever set the NO_WEBSITE reachability
+ * state; everything else stays UNKNOWN and unqualified.
+ */
+export type WebsiteResolutionOutcome =
+  | {
+      resolution: "FOUND_WEBSITE";
+      website: string;
+      sourceReference?: string;
+      details?: string;
+    }
+  | {
+      resolution: "CONFIRMED_NO_WEBSITE";
+      sourceReference?: string;
+      details?: string;
+      /** Real, publicly found values — never fabricated. */
+      enrichment?: {
+        phone?: string;
+        email?: string;
+        address?: string;
+        googleMapsUrl?: string;
+        instagram?: string;
+        facebook?: string;
+        tiktok?: string;
+        linkedin?: string;
+      };
+    }
+  | { resolution: "NOT_FOUND"; details?: string }
+  | { resolution: "FAILED"; details?: string };
+
 /* ------------------------------ Providers -------------------------------- */
 
 export type DiscoveryProviderKind = "IMPORT" | "API";
